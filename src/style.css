@@ -48,6 +48,7 @@ select {
 .header {
   text-align: center;
   margin-bottom: 14px;
+  position: relative;
 }
 
 .header h1 {
@@ -57,7 +58,76 @@ select {
   color: #111827;
 }
 
-.screen {
+.nav-back-btn {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: #eef2ff;
+  color: #3730a3;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.home-screen,
+.attendance-screen,
+.timer-page {
+  width: 100%;
+}
+
+.home-header {
+  margin-bottom: 20px;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.home-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 180px;
+  border: none;
+  border-radius: 22px;
+  cursor: pointer;
+  color: #fff;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.12);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.attendance-card {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+}
+
+.timer-card {
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+}
+
+.home-icon {
+  font-size: 2.4rem;
+}
+
+.home-title {
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.home-subtitle {
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+.screen,
+.timer-page-panel {
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -121,7 +191,8 @@ select {
   gap: 12px;
 }
 
-.action-btn {
+.action-btn,
+.tool-btn {
   width: 100%;
   border: none;
   border-radius: 16px;
@@ -140,6 +211,10 @@ select {
 
 .end-btn {
   background: linear-gradient(135deg, #ef4444, #dc2626);
+}
+
+.tool-btn {
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
 }
 
 .history-card {
@@ -286,4 +361,76 @@ select {
 .save-btn {
   background: #22c55e;
   color: white;
+}
+
+.timer-page-panel {
+  background: #fff;
+  border: 1px solid rgba(17, 24, 39, 0.05);
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  padding: 22px 16px;
+}
+
+.timer-display {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  text-align: center;
+  font-size: clamp(1.2rem, 5vw, 2rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #111827;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 18px 12px;
+  line-height: 1.7;
+  min-height: 110px;
+}
+
+.timer-unit,
+.timer-label {
+  display: inline-block;
+  min-width: 2.2ch;
+  text-align: center;
+}
+
+.timer-ms {
+  min-width: 3.4ch;
+}
+
+.timer-label {
+  min-width: 1.6ch;
+  color: #4b5563;
+  font-size: 0.8em;
+  font-weight: 700;
+}
+
+.timer-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.timer-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 12px 10px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+}
+
+.timer-btn.start {
+  background: #22c55e;
+}
+
+.timer-btn.pause {
+  background: #f59e0b;
+}
+
+.timer-btn.reset {
+  background: #ef4444;
 }
