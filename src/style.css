@@ -249,26 +249,18 @@ select {
 }
 
 .time-input-wrap {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.time-input-wrap input[type='text'] {
+  display: flex;
   width: 100%;
 }
 
 .time-input-wrap input[type='time'] {
-  width: 150px;
-  min-width: 150px;
-  max-width: 150px;
+  width: 100%;
   border: 1px solid #cbd5e1;
   border-radius: 10px;
   background: #f8fafc;
   color: #111827;
-  padding: 9px 8px;
-  flex-shrink: 0;
+  padding: 9px 12px;
+  font-size: 1rem;
 }
 
 .edit-actions {

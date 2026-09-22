@@ -193,42 +193,13 @@ const editForm = ref({
   endTime: '',
 })
 
-const startTimePicker = ref(null)
-const endTimePicker = ref(null)
-
 const isEditPanelOpen = ref(false)
-
-function openTimePicker(type) {
-  const picker = type === 'start' ? startTimePicker.value : endTimePicker.value
-
-  if (picker && typeof picker.showPicker === 'function') {
-    picker.showPicker()
-  }
-}
-
-function normalizeTimeString(value) {
-  if (!value) {
-    return '00:00:00'
-  }
-
-  const match = value.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/)
-
-  if (!match) {
-    return '00:00:00'
-  }
-
-  const hours = String(Math.min(Number(match[1] || 0), 23)).padStart(2, '0')
-  const minutes = String(Math.min(Number(match[2] || 0), 59)).padStart(2, '0')
-  const seconds = String(Math.min(Number(match[3] || 0), 59)).padStart(2, '0')
-
-  return `${hours}:${minutes}:${seconds}`
-}
 
 function openEditPanel(record) {
   editForm.value = {
     recordDate: record.date,
-    startTime: normalizeTimeString(record.startTime || '08:00:00'),
-    endTime: normalizeTimeString(record.endTime || '18:00:00'),
+    startTime: record.startTime || '08:00:00',
+    endTime: record.endTime || '18:00:00',
   }
   isEditPanelOpen.value = true
 }
@@ -243,16 +214,6 @@ function submitEditRecord() {
     return
   }
 
-  if (!isValidTimeString(editForm.value.startTime)) {
-    alert('上班时间格式不正确，请使用 HH:mm:ss')
-    return
-  }
-
-  if (!isValidTimeString(editForm.value.endTime)) {
-    alert('下班时间格式不正确，请使用 HH:mm:ss')
-    return
-  }
-
   const targetRecord = attendanceRecords.value.find((item) => item.date === editForm.value.recordDate)
 
   if (!targetRecord) {
@@ -260,8 +221,8 @@ function submitEditRecord() {
     return
   }
 
-  targetRecord.startTime = editForm.value.startTime
-  targetRecord.endTime = editForm.value.endTime
+  targetRecord.startTime = editForm.value.startTime || ''
+  targetRecord.endTime = editForm.value.endTime || ''
   saveAttendanceRecords()
   closeEditPanel()
 }
@@ -336,44 +297,14 @@ onMounted(() => {
         <label class="field">
           <span>上班时间</span>
           <div class="time-input-wrap">
-            <input
-              v-model="editForm.startTime"
-              type="text"
-              inputmode="numeric"
-              maxlength="8"
-              placeholder="HH:mm:ss"
-              @blur="editForm.startTime = normalizeTimeString(editForm.startTime)"
-            />
-            <input
-              ref="startTimePicker"
-              v-model="editForm.startTime"
-              type="time"
-              step="1"
-              class="native-time-input"
-              @change="editForm.startTime = normalizeTimeString(editForm.startTime)"
-            />
+            <input v-model="editForm.startTime" type="time" step="1" />
           </div>
         </label>
 
         <label class="field">
           <span>下班时间</span>
           <div class="time-input-wrap">
-            <input
-              v-model="editForm.endTime"
-              type="text"
-              inputmode="numeric"
-              maxlength="8"
-              placeholder="HH:mm:ss"
-              @blur="editForm.endTime = normalizeTimeString(editForm.endTime)"
-            />
-            <input
-              ref="endTimePicker"
-              v-model="editForm.endTime"
-              type="time"
-              step="1"
-              class="native-time-input"
-              @change="editForm.endTime = normalizeTimeString(editForm.endTime)"
-            />
+            <input v-model="editForm.endTime" type="time" step="1" />
           </div>
         </label>
 
