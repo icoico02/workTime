@@ -187,61 +187,54 @@ function deleteRecord(recordDate) {
   saveAttendanceRecords()
 }
 
-function editRecord(record) {
-  const inputDate = window.prompt('请输入日期，格式：YYYY-MM-DD', record.date)
+const editForm = ref({
+  recordDate: '',
+  startTime: '',
+  endTime: '',
+})
 
-  if (inputDate === null) {
+const isEditPanelOpen = ref(false)
+
+function openEditPanel(record) {
+  editForm.value = {
+    recordDate: record.date,
+    startTime: record.startTime || '08:00:00',
+    endTime: record.endTime || '18:00:00',
+  }
+  isEditPanelOpen.value = true
+}
+
+function closeEditPanel() {
+  isEditPanelOpen.value = false
+}
+
+function submitEditRecord() {
+  if (!editForm.value.recordDate) {
+    alert('请选择日期')
     return
   }
 
-  const datePattern = /^\d{4}-\d{2}-\d{2}$/
-  if (!datePattern.test(inputDate)) {
-    alert('日期格式不正确，请使用 YYYY-MM-DD')
-    return
-  }
-
-  const inputStartTime = window.prompt('请输入上班时间，格式：HH:mm:ss', record.startTime || '08:00:00')
-
-  if (inputStartTime === null) {
-    return
-  }
-
-  if (!isValidTimeString(inputStartTime)) {
+  if (!isValidTimeString(editForm.value.startTime)) {
     alert('上班时间格式不正确，请使用 HH:mm:ss')
     return
   }
 
-  const inputEndTime = window.prompt('请输入下班时间，格式：HH:mm:ss', record.endTime || '18:00:00')
-
-  if (inputEndTime === null) {
-    return
-  }
-
-  if (!isValidTimeString(inputEndTime)) {
+  if (!isValidTimeString(editForm.value.endTime)) {
     alert('下班时间格式不正确，请使用 HH:mm:ss')
     return
   }
 
-  const oldDate = record.date
-  record.date = inputDate
-  record.startTime = inputStartTime
-  record.endTime = inputEndTime
+  const targetRecord = attendanceRecords.value.find((item) => item.date === editForm.value.recordDate)
 
-  if (oldDate !== inputDate) {
-    const currentIndex = attendanceRecords.value.findIndex((item) => item.date === oldDate)
-    const targetIndex = attendanceRecords.value.findIndex((item) => item.date === inputDate)
-
-    if (currentIndex !== -1) {
-      attendanceRecords.value.splice(currentIndex, 1)
-      if (targetIndex !== -1) {
-        attendanceRecords.value.splice(targetIndex, 0, record)
-      } else {
-        attendanceRecords.value.unshift(record)
-      }
-    }
+  if (!targetRecord) {
+    alert('未找到对应日期记录')
+    return
   }
 
+  targetRecord.startTime = editForm.value.startTime
+  targetRecord.endTime = editForm.value.endTime
   saveAttendanceRecords()
+  closeEditPanel()
 }
 
 onMounted(() => {
@@ -294,12 +287,38 @@ onMounted(() => {
             <span>{{ item.endTime || '--:--' }}</span>
             <span>{{ formatWorkDuration(item) }}</span>
             <div class="record-actions">
-              <button class="mini-btn edit-btn" type="button" @click="editRecord(item)">修改</button>
+              <button class="mini-btn edit-btn" type="button" @click="openEditPanel(item)">修改</button>
               <button class="mini-btn delete-btn" type="button" @click="deleteRecord(item.date)">删除</button>
             </div>
           </li>
         </ul>
       </section>
     </main>
+
+    <div v-if="isEditPanelOpen" class="edit-overlay" @click.self="closeEditPanel">
+      <div class="edit-panel">
+        <h3>修改签到记录</h3>
+
+        <label class="field">
+          <span>日期</span>
+          <input v-model="editForm.recordDate" type="date" />
+        </label>
+
+        <label class="field">
+          <span>上班时间</span>
+          <input v-model="editForm.startTime" type="time" step="1" />
+        </label>
+
+        <label class="field">
+          <span>下班时间</span>
+          <input v-model="editForm.endTime" type="time" step="1" />
+        </label>
+
+        <div class="edit-actions">
+          <button class="cancel-btn" type="button" @click="closeEditPanel">取消</button>
+          <button class="save-btn" type="button" @click="submitEditRecord">保存</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
