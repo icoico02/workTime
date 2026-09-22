@@ -344,7 +344,14 @@ onMounted(() => {
               placeholder="HH:mm:ss"
               @blur="editForm.startTime = normalizeTimeString(editForm.startTime)"
             />
-            <input ref="startTimePicker" v-model="editForm.startTime" type="time" step="1" class="native-time-input" />
+            <input
+              ref="startTimePicker"
+              v-model="editForm.startTime"
+              type="time"
+              step="1"
+              class="native-time-input"
+              @change="editForm.startTime = normalizeTimeString(editForm.startTime)"
+            />
             <button class="picker-btn" type="button" @click="openTimePicker('start')">选择</button>
           </div>
         </label>
@@ -360,7 +367,14 @@ onMounted(() => {
               placeholder="HH:mm:ss"
               @blur="editForm.endTime = normalizeTimeString(editForm.endTime)"
             />
-            <input ref="endTimePicker" v-model="editForm.endTime" type="time" step="1" class="native-time-input" />
+            <input
+              ref="endTimePicker"
+              v-model="editForm.endTime"
+              type="time"
+              step="1"
+              class="native-time-input"
+              @change="editForm.endTime = normalizeTimeString(editForm.endTime)"
+            />
             <button class="picker-btn" type="button" @click="openTimePicker('end')">选择</button>
           </div>
         </label>
