@@ -172,10 +172,6 @@ function formatWorkDuration(item) {
   return `${hours}小时${minutes}分钟`
 }
 
-function isValidTimeString(value) {
-  return /^\d{2}:\d{2}:\d{2}$/.test(value)
-}
-
 function deleteRecord(recordDate) {
   const confirmed = window.confirm('确定删除这条签到记录吗？')
 
@@ -208,20 +204,10 @@ function openTimePicker(type) {
 
 function normalizeTimeString(value) {
   if (!value) {
-    return '00:00:00'
+    return ''
   }
 
-  const match = value.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/)
-
-  if (!match) {
-    return '00:00:00'
-  }
-
-  const hours = String(Math.min(Number(match[1] || 0), 23)).padStart(2, '0')
-  const minutes = String(Math.min(Number(match[2] || 0), 59)).padStart(2, '0')
-  const seconds = String(Math.min(Number(match[3] || 0), 59)).padStart(2, '0')
-
-  return `${hours}:${minutes}:${seconds}`
+  return String(value).trim()
 }
 
 function openEditPanel(record) {
@@ -243,16 +229,6 @@ function submitEditRecord() {
     return
   }
 
-  if (!isValidTimeString(editForm.value.startTime)) {
-    alert('上班时间格式不正确，请使用 HH:mm:ss')
-    return
-  }
-
-  if (!isValidTimeString(editForm.value.endTime)) {
-    alert('下班时间格式不正确，请使用 HH:mm:ss')
-    return
-  }
-
   const targetRecord = attendanceRecords.value.find((item) => item.date === editForm.value.recordDate)
 
   if (!targetRecord) {
@@ -260,8 +236,8 @@ function submitEditRecord() {
     return
   }
 
-  targetRecord.startTime = editForm.value.startTime
-  targetRecord.endTime = editForm.value.endTime
+  targetRecord.startTime = normalizeTimeString(editForm.value.startTime)
+  targetRecord.endTime = normalizeTimeString(editForm.value.endTime)
   saveAttendanceRecords()
   closeEditPanel()
 }
