@@ -85,6 +85,13 @@ function formatShortDate(dateString) {
   return `${month}/${day}`
 }
 
+function formatWeekday(dateString) {
+  const date = new Date(`${dateString}T00:00:00`)
+  const weekdayMap = ['日', '一', '二', '三', '四', '五', '六']
+
+  return `周${weekdayMap[date.getDay()]}`
+}
+
 function getTodayRecord() {
   return attendanceRecords.value.find((item) => item.date === todayKey.value) || null
 }
@@ -181,6 +188,18 @@ function deleteRecord(recordDate) {
 }
 
 function editRecord(record) {
+  const inputDate = window.prompt('请输入日期，格式：YYYY-MM-DD', record.date)
+
+  if (inputDate === null) {
+    return
+  }
+
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/
+  if (!datePattern.test(inputDate)) {
+    alert('日期格式不正确，请使用 YYYY-MM-DD')
+    return
+  }
+
   const inputStartTime = window.prompt('请输入上班时间，格式：HH:mm:ss', record.startTime || '08:00:00')
 
   if (inputStartTime === null) {
@@ -203,8 +222,25 @@ function editRecord(record) {
     return
   }
 
+  const oldDate = record.date
+  record.date = inputDate
   record.startTime = inputStartTime
   record.endTime = inputEndTime
+
+  if (oldDate !== inputDate) {
+    const currentIndex = attendanceRecords.value.findIndex((item) => item.date === oldDate)
+    const targetIndex = attendanceRecords.value.findIndex((item) => item.date === inputDate)
+
+    if (currentIndex !== -1) {
+      attendanceRecords.value.splice(currentIndex, 1)
+      if (targetIndex !== -1) {
+        attendanceRecords.value.splice(targetIndex, 0, record)
+      } else {
+        attendanceRecords.value.unshift(record)
+      }
+    }
+  }
+
   saveAttendanceRecords()
 }
 
@@ -253,7 +289,7 @@ onMounted(() => {
 
         <ul class="history-list">
           <li v-for="item in historyList" :key="item.date" class="history-item">
-            <span>{{ formatShortDate(item.date) }}</span>
+            <span>{{ formatShortDate(item.date) }} {{ formatWeekday(item.date) }}</span>
             <span>{{ item.startTime || '--:--' }}</span>
             <span>{{ item.endTime || '--:--' }}</span>
             <span>{{ formatWorkDuration(item) }}</span>
