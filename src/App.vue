@@ -352,7 +352,6 @@ onMounted(() => {
               class="native-time-input"
               @change="editForm.startTime = normalizeTimeString(editForm.startTime)"
             />
-            <button class="picker-btn" type="button" @click="openTimePicker('start')">选择</button>
           </div>
         </label>
 
@@ -375,7 +374,6 @@ onMounted(() => {
               class="native-time-input"
               @change="editForm.endTime = normalizeTimeString(editForm.endTime)"
             />
-            <button class="picker-btn" type="button" @click="openTimePicker('end')">选择</button>
           </div>
         </label>
 
