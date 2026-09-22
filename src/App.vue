@@ -414,9 +414,11 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="timer-actions">
-          <button class="timer-btn start" type="button" @click="startTimer">开始</button>
-          <button class="timer-btn pause" type="button" @click="pauseTimer">暂停</button>
-          <button class="timer-btn reset" type="button" @click="resetTimer">重置</button>
+          <button class="timer-btn start full-width" type="button" @click="startTimer">开始</button>
+          <div class="timer-secondary-row">
+            <button class="timer-btn pause" type="button" @click="pauseTimer">暂停</button>
+            <button class="timer-btn reset" type="button" @click="resetTimer">重置</button>
+          </div>
         </div>
       </main>
     </div>
