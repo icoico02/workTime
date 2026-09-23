@@ -302,6 +302,7 @@ const makeUpForm = ref({
   endTime: '18:00:00',
 })
 const currentScreen = ref('home')
+const workspaceScreenStorageKey = 'workspaceCurrentScreen'
 const pressedButton = ref('')
 const router = useRouter()
 const route = useRoute()
@@ -316,6 +317,17 @@ const activeNavigation = computed(() => {
   if (route.path.startsWith('/super-admin')) return 'super-admin'
   if (route.path.startsWith('/admin')) return 'admin'
   return currentScreen.value
+})
+
+function restoreWorkspaceScreen() {
+  const key = userStorageKey(workspaceScreenStorageKey)
+  const savedScreen = key ? localStorage.getItem(key) : null
+  return ['attendance', 'timer'].includes(savedScreen) ? savedScreen : 'home'
+}
+
+watch(currentScreen, (screen) => {
+  const key = userStorageKey(workspaceScreenStorageKey)
+  if (key) localStorage.setItem(key, screen)
 })
 
 async function loadPendingApprovalCount() {
@@ -637,7 +649,7 @@ async function handleAuthSession(session) {
   authGateMessage.value = ''
   authUser.value = session.user
   userProfile.value = profile
-  currentScreen.value = 'home'
+  currentScreen.value = restoreWorkspaceScreen()
   resetViewportScroll()
   if (isInventoryRoute.value || isAdminRoute.value) {
     await router.replace('/')

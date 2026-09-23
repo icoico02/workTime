@@ -1,13 +1,14 @@
 :root {
-  --ios-bg-1: #e9f1fb;
-  --ios-bg-2: #f7f8ff;
+  --ios-bg-1: #e6f1fb;
+  --ios-bg-2: #f6f8ff;
   --page-background:
-    radial-gradient(ellipse at 14% 8%, rgba(255, 255, 255, 0.92), transparent 36%),
-    radial-gradient(ellipse at 88% 24%, rgba(191, 219, 254, 0.48), transparent 42%),
-    radial-gradient(ellipse at 52% 100%, rgba(221, 214, 254, 0.34), transparent 44%),
-    linear-gradient(135deg, #e9f1fb 0%, #eef4fc 48%, #f6f5ff 100%);
-  --glass-bg: rgba(255, 255, 255, 0.34);
-  --glass-border: rgba(255, 255, 255, 0.76);
+    radial-gradient(ellipse at 16% 4%, rgba(255, 255, 255, 0.96), transparent 38%),
+    radial-gradient(ellipse at 88% 18%, rgba(186, 230, 253, 0.46), transparent 46%),
+    radial-gradient(ellipse at 22% 74%, rgba(221, 214, 254, 0.34), transparent 48%),
+    radial-gradient(ellipse at 88% 88%, rgba(254, 215, 170, 0.23), transparent 44%),
+    linear-gradient(145deg, #e6f1fb 0%, #edf6fd 46%, #f5f3ff 100%);
+  --glass-bg: rgba(255, 255, 255, 0.3);
+  --glass-border: rgba(255, 255, 255, 0.52);
   --glass-highlight: rgba(255, 255, 255, 0.78);
   --glass-shadow: rgba(51, 65, 94, 0.12);
   --unit-gap: 6px;
@@ -2784,4 +2785,53 @@ body,
 
 .system-sidebar {
   background-color: rgba(255, 255, 255, 0.2);
+}
+
+.auth-glass-card,
+.card,
+.home-card,
+.home-account,
+.inventory-glass-card,
+.dashboard-card,
+.dashboard-empty,
+.edit-panel,
+.timer-warning-modal {
+  border-color: rgba(255, 255, 255, 0.5);
+  background-color: rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 18px 46px rgba(91, 109, 145, 0.1),
+    0 3px 10px rgba(105, 125, 160, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(34px) saturate(165%);
+  -webkit-backdrop-filter: blur(34px) saturate(165%);
+}
+
+.home-card.attendance-card {
+  background: linear-gradient(145deg, rgba(232, 246, 255, 0.5), rgba(255, 255, 255, 0.24));
+}
+
+.home-card.timer-card {
+  background: linear-gradient(145deg, rgba(240, 238, 255, 0.5), rgba(255, 255, 255, 0.24));
+}
+
+.home-card.home-dashboard-card,
+.home-card.super-admin-card {
+  background: linear-gradient(145deg, rgba(228, 249, 246, 0.48), rgba(255, 255, 255, 0.24));
+}
+
+.home-card.inventory-card {
+  background: linear-gradient(145deg, rgba(255, 243, 232, 0.46), rgba(255, 255, 255, 0.24));
+}
+
+.home-card.admin-card {
+  background: linear-gradient(145deg, rgba(252, 238, 246, 0.46), rgba(255, 255, 255, 0.24));
+}
+
+.system-sidebar {
+  background: rgba(244, 249, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.48);
+  box-shadow: 12px 0 34px rgba(82, 102, 139, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.66);
+  backdrop-filter: blur(32px) saturate(175%);
+  -webkit-backdrop-filter: blur(32px) saturate(175%);
 }
