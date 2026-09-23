@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import FunctionHeader from '../components/FunctionHeader.vue'
 import GlassModal from '../components/GlassModal.vue'
 import { supabase } from '../supabase'
 
@@ -13,10 +14,11 @@ const logsLoading = ref(false)
 const currentProfile = ref(null)
 const reason = ref('')
 const modal = ref({ show: false, message: '' })
+const expandedLogUserId = ref('')
 
 const isSuperAdmin = computed(() => route.path === '/super-admin')
 const pendingOnly = computed(() => !isSuperAdmin.value || route.query.section === 'pending')
-const title = computed(() => isSuperAdmin.value ? '管理后台' : '用户审批')
+const title = computed(() => isSuperAdmin.value ? '审批操作记录' : '用户审批')
 const visibleUsers = computed(() => !pendingOnly.value
   ? users.value
   : users.value.filter((user) => user.approval_status === 'pending'))
@@ -25,6 +27,31 @@ const metrics = computed(() => ({
   pending: users.value.filter((user) => user.approval_status === 'pending').length,
   admins: users.value.filter((user) => user.role === 'admin').length,
 }))
+const groupedApprovalLogs = computed(() => {
+  const profiles = new Map(users.value.map((user) => [user.id, user]))
+  const groups = new Map()
+  const sortedLogs = [...logs.value].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+
+  sortedLogs.forEach((log) => {
+    const userId = String(log.actor_user_id || 'unknown')
+    if (!groups.has(userId)) groups.set(userId, [])
+    groups.get(userId).push(log)
+  })
+
+  return [...groups.entries()].map(([userId, userLogs]) => {
+    const profile = profiles.get(userId)
+    const latestLog = userLogs[0]
+
+    return {
+      userId,
+      username: profile?.username || latestLog.actor_username || (userId === 'unknown' ? '未知管理员' : userId),
+      status: profile?.approval_status || 'unknown',
+      role: profile?.role || 'admin',
+      latestAt: latestLog.created_at,
+      logs: userLogs,
+    }
+  })
+})
 
 function formatDateTime(value) {
   if (!value) return '--'
@@ -33,6 +60,31 @@ function formatDateTime(value) {
 
 function usernameFor(userId) {
   return users.value.find((user) => user.id === userId)?.username || userId || '--'
+}
+
+function toggleLogUser(userId) {
+  expandedLogUserId.value = expandedLogUserId.value === userId ? '' : userId
+}
+
+function formatActionType(log) {
+  const action = String(log.action_type || log.operation_type || '').toLowerCase()
+
+  if (action.includes('approve') || action === 'approval') return '批准'
+  if (action.includes('reject')) return '拒绝'
+  if (action.includes('promote') || action.includes('demote') || action.includes('role')) return '修改角色'
+  return log.action_type || log.operation_type || '审批操作'
+}
+
+function hasStatusChange(log) {
+  return Boolean(log.old_status && log.new_status && log.old_status !== log.new_status)
+}
+
+function hasRoleChange(log) {
+  return Boolean(log.old_role && log.new_role && log.old_role !== log.new_role)
+}
+
+function hasReason(log) {
+  return Boolean(String(log.reason || '').trim())
 }
 
 function showMessage(message) {
@@ -195,11 +247,7 @@ watch(() => route.query.section, async () => {
 
 <template>
   <div class="app-shell admin-shell">
-    <header class="header admin-header">
-      <button class="nav-back-btn" type="button" @click="goHome">← 返回</button>
-      <h1>{{ title }}</h1>
-      <button class="sign-out-btn" type="button" @click="signOut">退出</button>
-    </header>
+    <FunctionHeader :title="title" @back="goHome" @sign-out="signOut" />
 
     <main class="admin-content">
       <div v-if="loading" class="inventory-glass-card admin-empty">正在加载…</div>
@@ -249,16 +297,56 @@ watch(() => route.query.section, async () => {
         </section>
 
         <section v-if="isSuperAdmin" class="inventory-glass-card admin-logs-card">
-          <div class="admin-section-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>审批操作记录</h2></div><span v-if="logsLoading">加载中…</span></div>
-          <div v-if="!logs.length" class="admin-empty">暂无审批操作记录。</div>
-          <div v-else class="admin-log-list">
-            <article v-for="log in logs" :key="log.id" class="admin-log-row">
-              <strong>{{ formatDateTime(log.created_at) }}</strong>
-              <span>{{ usernameFor(log.actor_user_id) }} → {{ usernameFor(log.target_user_id) }}</span>
-              <span>{{ log.action_type || log.operation_type || '--' }}</span>
-              <span>{{ log.old_status || '--' }} → {{ log.new_status || '--' }}</span>
-              <span>{{ log.old_role || '--' }} → {{ log.new_role || '--' }}</span>
-              <small>{{ log.reason || '—' }}</small>
+          <div class="admin-section-heading">
+            <div><p class="eyebrow">AUDIT TRAIL</p><h2>管理员操作记录</h2></div>
+            <span>{{ logsLoading ? '加载中…' : `${groupedApprovalLogs.length} 位管理员` }}</span>
+          </div>
+          <div v-if="!groupedApprovalLogs.length" class="admin-empty">暂无审批操作记录。</div>
+          <div v-else class="approval-user-list">
+            <article v-for="group in groupedApprovalLogs" :key="group.userId" class="approval-user-group">
+              <button
+                class="approval-user-summary"
+                :class="{ expanded: expandedLogUserId === group.userId }"
+                type="button"
+                :aria-expanded="expandedLogUserId === group.userId"
+                @click="toggleLogUser(group.userId)"
+              >
+                <span class="approval-user-main">
+                  <strong>{{ group.username }}</strong>
+                  <small>最近审批 {{ formatDateTime(group.latestAt) }}</small>
+                </span>
+                <span class="approval-user-tags">
+                  <span class="admin-status" :class="`status-${group.status}`">{{ group.status }}</span>
+                  <span class="admin-role" :class="`role-${group.role}`">{{ group.role }}</span>
+                </span>
+                <span class="approval-log-count">{{ group.logs.length }} 条记录</span>
+                <span class="approval-chevron" aria-hidden="true">⌄</span>
+              </button>
+
+              <div v-if="expandedLogUserId === group.userId" class="approval-timeline">
+                <article v-for="log in group.logs" :key="log.id" class="approval-timeline-item">
+                  <span class="approval-timeline-dot" aria-hidden="true"></span>
+                  <div class="approval-record-card">
+                    <div class="approval-record-heading">
+                      <strong>{{ group.username }} 对 {{ usernameFor(log.target_user_id) }}：{{ formatActionType(log) }}</strong>
+                      <time>操作时间 {{ formatDateTime(log.created_at) }}</time>
+                    </div>
+                    <dl class="approval-record-details">
+                      <div><dt>审批人</dt><dd>{{ group.username }}</dd></div>
+                      <div><dt>操作对象</dt><dd>{{ usernameFor(log.target_user_id) }}</dd></div>
+                      <div><dt>操作类型</dt><dd>{{ formatActionType(log) }}</dd></div>
+                      <div v-if="hasStatusChange(log)" class="approval-change-row">
+                        <dt>状态变更</dt>
+                        <dd><span :class="`status-text-${log.old_status}`">{{ log.old_status }}</span><b>→</b><span :class="`status-text-${log.new_status}`">{{ log.new_status }}</span></dd>
+                      </div>
+                      <div v-if="hasRoleChange(log)" class="approval-change-row">
+                        <dt>角色变更</dt><dd><span>{{ log.old_role }}</span><b>→</b><span>{{ log.new_role }}</span></dd>
+                      </div>
+                      <div v-if="hasReason(log)" class="approval-note-row"><dt>备注</dt><dd>{{ log.reason }}</dd></div>
+                    </dl>
+                  </div>
+                </article>
+              </div>
             </article>
           </div>
         </section>

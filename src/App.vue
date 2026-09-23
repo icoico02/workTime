@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
+import FunctionHeader from './components/FunctionHeader.vue'
 import GlassModal from './components/GlassModal.vue'
+import SystemSidebar from './components/SystemSidebar.vue'
 import { AUTH_STORAGE_KEY, authStorage, isSupabaseConfigured, supabase } from './supabase'
 
 const authUser = ref(null)
@@ -299,8 +301,16 @@ const router = useRouter()
 const route = useRoute()
 const isInventoryRoute = computed(() => route.path.startsWith('/inventory'))
 const isAdminRoute = computed(() => route.path.startsWith('/admin') || route.path.startsWith('/super-admin'))
+const isDashboardRoute = computed(() => route.path === '/dashboard')
 const isAdmin = computed(() => ['admin', 'super_admin'].includes(userProfile.value?.role))
 const isSuperAdmin = computed(() => userProfile.value?.role === 'super_admin')
+const activeNavigation = computed(() => {
+  if (route.path.startsWith('/inventory')) return 'inventory'
+  if (route.path === '/dashboard') return 'dashboard'
+  if (route.path.startsWith('/super-admin')) return 'super-admin'
+  if (route.path.startsWith('/admin')) return 'admin'
+  return currentScreen.value
+})
 
 async function loadPendingApprovalCount() {
   if (!supabase || !authUser.value || !isAdmin.value) {
@@ -363,7 +373,8 @@ const approvalStatusLoading = ref(false)
 const approvalStatusResult = ref(null)
 const authSubscription = ref(null)
 const timerPendingRecord = ref(null)
-const lastTimerSessionPersistAt = ref(0)
+const selectedTimerRecordIds = ref([])
+const timerDeleteConfirmation = ref({ show: false, recordIds: [] })
 
 watch(approvalStatusUsername, () => {
   approvalStatusResult.value = null
@@ -423,6 +434,20 @@ function closeTimerWarning() {
   timerWarningAction.value = null
 }
 
+function timerRecordSaveErrorMessage(error) {
+  const detail = `${error?.code || ''} ${error?.message || ''}`.toLowerCase()
+
+  if (detail.includes('total_milliseconds') || detail.includes('42703')) {
+    return '计时记录表尚未升级，请先在 Supabase 执行 supabase/timer_records.sql。'
+  }
+
+  if (detail.includes('42501') || detail.includes('row-level security')) {
+    return '没有保存计时记录的权限，请检查 timer_records 的 RLS 策略。'
+  }
+
+  return '记录保存失败，请检查网络后重试。'
+}
+
 function saveActiveTimerSession() {
   const storageKey = activeTimerStorageKey()
 
@@ -436,11 +461,18 @@ function saveActiveTimerSession() {
   }
 
   localStorage.setItem(storageKey, JSON.stringify({
+    startTime: timerSessionStartedAt.value,
     startedAt: timerSessionStartedAt.value,
+    timerStartedAt: timerStartedAt.value,
     elapsedMs: timerElapsedMs.value,
     running: timerRunning.value,
     saved: timerSessionSaved.value,
   }))
+}
+
+function clearActiveTimerSession() {
+  const storageKey = activeTimerStorageKey()
+  if (storageKey) localStorage.removeItem(storageKey)
 }
 
 function restoreActiveTimerSession() {
@@ -451,17 +483,27 @@ function restoreActiveTimerSession() {
     const saved = localStorage.getItem(storageKey)
     const session = saved ? JSON.parse(saved) : null
 
-    if (!session?.startedAt) {
+    const sessionStartedAt = Number(session?.startTime || session?.startedAt)
+    const elapsedMs = Math.max(0, Number(session?.elapsedMs || 0))
+
+    if (!Number.isFinite(sessionStartedAt) || sessionStartedAt <= 0) {
       return
     }
 
-    timerSessionStartedAt.value = Number(session.startedAt)
+    clearInterval(timerIntervalId.value)
+    timerIntervalId.value = null
+    timerSessionStartedAt.value = sessionStartedAt
     timerSessionSaved.value = Boolean(session.saved)
-    timerElapsedMs.value = Number(session.elapsedMs || 0)
+    timerElapsedMs.value = elapsedMs
+    timerRunning.value = false
 
     if (session.running) {
-      timerStartedAt.value = Date.now() - timerElapsedMs.value
+      const runningStartedAt = Number(session.timerStartedAt)
+      timerStartedAt.value = Number.isFinite(runningStartedAt) && runningStartedAt > 0
+        ? runningStartedAt
+        : Date.now() - elapsedMs
       timerRunning.value = true
+      syncTimerElapsed()
       startTimerInterval()
     }
   } catch (error) {
@@ -469,6 +511,25 @@ function restoreActiveTimerSession() {
     const storageKey = activeTimerStorageKey()
     if (storageKey) localStorage.removeItem(storageKey)
   }
+}
+
+function syncTimerElapsed() {
+  if (!timerRunning.value || !timerStartedAt.value) return
+  timerElapsedMs.value = Math.max(0, Date.now() - timerStartedAt.value)
+}
+
+function persistTimerForPageLifecycle() {
+  syncTimerElapsed()
+  saveActiveTimerSession()
+}
+
+function handleTimerVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    persistTimerForPageLifecycle()
+    return
+  }
+
+  syncTimerElapsed()
 }
 
 function formatRecordTime(value) {
@@ -482,11 +543,19 @@ function formatRecordDate(value) {
 }
 
 function formatStoredDuration(record) {
+  if (record.total_milliseconds != null && Number.isFinite(Number(record.total_milliseconds))) {
+    return formatTimerDisplay(Number(record.total_milliseconds))
+  }
+
+  if (record.total_seconds != null && Number.isFinite(Number(record.total_seconds))) {
+    return formatTimerDisplay(Number(record.total_seconds) * 1000)
+  }
+
   const start = new Date(record.start_time).getTime()
   const end = new Date(record.end_time).getTime()
   const elapsed = Number.isFinite(start) && Number.isFinite(end)
     ? Math.max(0, end - start)
-    : Number(record.total_seconds || 0) * 1000
+    : 0
   return formatTimerDisplay(elapsed)
 }
 
@@ -511,6 +580,7 @@ async function loadTimerHistory() {
   }
 
   timerHistory.value = data || []
+  selectedTimerRecordIds.value = selectedTimerRecordIds.value.filter((id) => timerHistory.value.some((record) => record.id === id))
 }
 
 async function loadCurrentProfile(user) {
@@ -768,25 +838,28 @@ async function saveTimerRecord() {
   }
 
   const endTime = new Date()
+  const totalMilliseconds = Math.floor(timerElapsedMs.value)
   const totalSeconds = Math.floor(timerElapsedMs.value / 1000)
   const record = {
     user_id: user.id,
     start_time: new Date(timerSessionStartedAt.value).toISOString(),
     end_time: endTime.toISOString(),
+    total_milliseconds: totalMilliseconds,
     total_seconds: totalSeconds,
   }
 
   const { error } = await supabase.from('timer_records').insert(record)
   if (error) {
+    console.error('保存计时记录失败:', error)
     timerPendingRecord.value = record
-    timerWarning.value = { show: true, message: '记录保存失败，请检查网络后重试。' }
+    timerWarning.value = { show: true, message: timerRecordSaveErrorMessage(error) }
     timerWarningAction.value = 'retry'
     return false
   }
 
   timerSessionSaved.value = true
   timerPendingRecord.value = null
-  saveActiveTimerSession()
+  clearCompletedTimerState()
   await loadTimerHistory()
   timerWarning.value = { show: true, message: '记录已保存' }
   timerWarningAction.value = null
@@ -798,14 +871,15 @@ async function retryTimerRecord() {
 
   const { error } = await supabase.from('timer_records').insert(timerPendingRecord.value)
   if (error) {
-    showTimerWarning('记录保存失败，请检查网络后重试。')
+    console.error('重试保存计时记录失败:', error)
+    showTimerWarning(timerRecordSaveErrorMessage(error))
     timerWarningAction.value = 'retry'
     return
   }
 
   timerSessionSaved.value = true
   timerPendingRecord.value = null
-  saveActiveTimerSession()
+  clearCompletedTimerState()
   await loadTimerHistory()
   showTimerWarning('记录已保存')
 }
@@ -827,6 +901,33 @@ function openInventoryPage() {
   router.push('/inventory/dashboard')
 }
 
+async function navigateWorkspace(target) {
+  if (target === 'inventory') {
+    await router.push('/inventory/dashboard')
+    return
+  }
+
+  if (target === 'dashboard') {
+    await router.push('/dashboard')
+    return
+  }
+
+  if (target === 'admin') {
+    await router.push('/admin')
+    return
+  }
+
+  if (target === 'super-admin') {
+    await router.push('/super-admin')
+    return
+  }
+
+  if (route.path !== '/') await router.push('/')
+  currentScreen.value = target
+  if (target === 'home') loadPendingApprovalCount()
+  resetViewportScroll()
+}
+
 function resetViewportScroll() {
   window.requestAnimationFrame(() => window.scrollTo(0, 0))
 }
@@ -834,11 +935,7 @@ function resetViewportScroll() {
 function startTimerInterval() {
   clearInterval(timerIntervalId.value)
   timerIntervalId.value = setInterval(() => {
-    timerElapsedMs.value = Date.now() - timerStartedAt.value
-    if (Date.now() - lastTimerSessionPersistAt.value >= 250) {
-      saveActiveTimerSession()
-      lastTimerSessionPersistAt.value = Date.now()
-    }
+    syncTimerElapsed()
   }, 10)
 }
 
@@ -856,22 +953,45 @@ function startTimer() {
   timerStartedAt.value = Date.now() - timerElapsedMs.value
   timerRunning.value = true
   saveActiveTimerSession()
-  lastTimerSessionPersistAt.value = Date.now()
   startTimerInterval()
 }
 
-async function pauseTimer() {
+function pauseTimer() {
   if (!timerRunning.value) {
     return
   }
 
+  syncTimerElapsed()
   timerRunning.value = false
   clearInterval(timerIntervalId.value)
   timerIntervalId.value = null
-  timerElapsedMs.value = Date.now() - timerStartedAt.value
   saveActiveTimerSession()
-  lastTimerSessionPersistAt.value = Date.now()
+}
+
+async function endTimer() {
+  if (!timerSessionStartedAt.value) {
+    showTimerWarning('请先开始计时')
+    return
+  }
+
+  syncTimerElapsed()
+  timerRunning.value = false
+  clearInterval(timerIntervalId.value)
+  timerIntervalId.value = null
+  saveActiveTimerSession()
   await saveTimerRecord()
+}
+
+function clearCompletedTimerState() {
+  clearInterval(timerIntervalId.value)
+  timerIntervalId.value = null
+  timerRunning.value = false
+  timerStartedAt.value = 0
+  timerElapsedMs.value = 0
+  timerSessionStartedAt.value = 0
+  timerSessionSaved.value = false
+  timerPendingRecord.value = null
+  clearActiveTimerSession()
 }
 
 function resetTimer() {
@@ -885,16 +1005,41 @@ function resetTimer() {
     return
   }
 
-  timerRunning.value = false
-  clearInterval(timerIntervalId.value)
-  timerIntervalId.value = null
-  timerElapsedMs.value = 0
-  timerStartedAt.value = 0
-  timerSessionStartedAt.value = 0
-  timerSessionSaved.value = false
-  timerPendingRecord.value = null
-  const storageKey = activeTimerStorageKey()
-  if (storageKey) localStorage.removeItem(storageKey)
+  clearCompletedTimerState()
+}
+
+function requestDeleteTimerRecords(recordIds) {
+  const ids = [...new Set(recordIds)].filter(Boolean)
+  if (!ids.length) return
+
+  timerDeleteConfirmation.value = { show: true, recordIds: ids }
+}
+
+function closeTimerDeleteConfirmation() {
+  timerDeleteConfirmation.value = { show: false, recordIds: [] }
+}
+
+async function confirmDeleteTimerRecords() {
+  const recordIds = timerDeleteConfirmation.value.recordIds
+  if (!supabase || !authUser.value || !recordIds.length) return
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+
+  const { error } = await supabase
+    .from('timer_records')
+    .delete()
+    .in('id', recordIds)
+    .eq('user_id', user.id)
+
+  if (error) {
+    showTimerWarning('删除计时记录失败，请检查网络后重试。')
+    return
+  }
+
+  selectedTimerRecordIds.value = selectedTimerRecordIds.value.filter((id) => !recordIds.includes(id))
+  closeTimerDeleteConfirmation()
+  await loadTimerHistory()
 }
 
 function migrateSessionToStorage(mode) {
@@ -1003,22 +1148,30 @@ onMounted(async () => {
   })
   authSubscription.value = data.subscription
   window.addEventListener('pending-approval-changed', handlePendingApprovalChanged)
+  window.addEventListener('pagehide', persistTimerForPageLifecycle)
+  document.addEventListener('visibilitychange', handleTimerVisibilityChange)
 })
 
 onBeforeUnmount(() => {
+  persistTimerForPageLifecycle()
   clearInterval(timerIntervalId.value)
   authSubscription.value?.unsubscribe()
   window.removeEventListener('pending-approval-changed', handlePendingApprovalChanged)
+  window.removeEventListener('pagehide', persistTimerForPageLifecycle)
+  document.removeEventListener('visibilitychange', handleTimerVisibilityChange)
 })
 </script>
 
 <template>
-  <div v-if="authLoading" class="auth-shell auth-loading-shell">
-    <div class="auth-glass-card"><p>正在检查登录状态…</p></div>
+  <div v-if="authLoading" class="login-page">
+    <div class="auth-shell auth-loading-shell">
+      <div class="auth-glass-card"><p>正在检查登录状态…</p></div>
+    </div>
   </div>
 
-  <main v-else-if="!authUser" class="auth-shell">
-    <section class="auth-glass-card">
+  <div v-else-if="!authUser" class="login-page">
+    <main class="auth-shell">
+      <section class="auth-glass-card">
       <p class="auth-eyebrow">PERSONAL WORKSPACE</p>
       <h1>{{ authMode === 'login' ? '系统登录' : authMode === 'register' ? '创建账号' : '查询审批状态' }}</h1>
       <p class="auth-description">{{ authMode === 'status' ? '输入用户名查看注册申请状态' : '登录后访问全部工作功能' }}</p>
@@ -1075,30 +1228,67 @@ onBeforeUnmount(() => {
         </button>
         <button v-if="authMode === 'login'" class="auth-status-link" type="button" @click="openApprovalStatusQuery">🔍 查询审批状态</button>
       </div>
-    </section>
-  </main>
+      </section>
+    </main>
+  </div>
 
-  <RouterView v-else-if="isInventoryRoute || isAdminRoute" />
+  <div v-else class="system-layout">
+    <SystemSidebar
+      :active-item="activeNavigation"
+      :is-admin="isAdmin"
+      :is-super-admin="isSuperAdmin"
+      :pending-count="pendingApprovalCount"
+      :username="userProfile?.username || authUser?.email?.split('@')[0] || '用户'"
+      @navigate="navigateWorkspace"
+      @sign-out="signOut"
+    />
 
-  <div v-else class="app-shell">
+    <div class="system-main">
+      <RouterView v-if="isInventoryRoute || isAdminRoute || isDashboardRoute" />
+
+      <div v-else class="app-shell" :class="{ 'home-app-shell': currentScreen === 'home' }">
     <div v-if="currentScreen === 'home'" class="home-screen">
       <header class="header home-header">
-        <h1>工作助手</h1>
-        <p class="home-welcome">欢迎回来，{{ authUser?.email?.split('@')[0] || '用户' }}</p>
-        <button class="sign-out-btn" type="button" @click="signOut">退出登录</button>
+        <div class="home-heading">
+          <p class="home-kicker">功能工作台</p>
+          <h1>工作助手</h1>
+          <p class="home-welcome">欢迎回来，今天也辛苦了</p>
+        </div>
+        <div class="home-account">
+          <span class="home-user-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="12" cy="8" r="3.5" />
+              <path d="M5.5 20c.7-4 3-6 6.5-6s5.8 2 6.5 6" />
+            </svg>
+          </span>
+          <span class="home-user-copy">
+            <small>当前用户</small>
+            <strong>{{ userProfile?.username || authUser?.email?.split('@')[0] || '用户' }}</strong>
+          </span>
+          <button class="sign-out-btn" type="button" @click="signOut">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <path d="M10 17l5-5-5-5M15 12H3" />
+              <path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" />
+            </svg>
+            <span>退出登录</span>
+          </button>
+        </div>
       </header>
 
       <section v-if="isAdmin && pendingApprovalCount > 0" class="pending-approval-banner">
-        <div>
-          <strong>🔔 有 {{ pendingApprovalCount }} 位新用户等待审批</strong>
-          <span>请及时处理</span>
+        <span class="approval-banner-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M19 8v6M22 11h-6" />
+          </svg>
+        </span>
+        <div class="approval-banner-copy">
+          <strong>{{ pendingApprovalCount }} 位新用户等待审批</strong>
+          <span>注册申请需要你的处理</span>
         </div>
         <button type="button" @click="openPendingApprovals">立即处理</button>
       </section>
-
-      <button v-if="isAdmin && pendingApprovalCount > 0" class="pending-approval-entry" type="button" @click="openPendingApprovals">
-        待审批 <span>{{ pendingApprovalCount }}</span>
-      </button>
 
       <main class="home-grid">
         <button
@@ -1111,7 +1301,12 @@ onBeforeUnmount(() => {
           @pointerleave="releaseButton('home-attendance')"
           @click="openAttendancePage"
         >
-          <span class="home-icon">✅</span>
+          <span class="home-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <rect x="3" y="4" width="18" height="17" rx="3" />
+              <path d="M8 2v4M16 2v4M3 10h18M8 15l2.5 2.5L16 12" />
+            </svg>
+          </span>
           <span class="home-title">签到</span>
           <span class="home-subtitle">上下班打卡</span>
         </button>
@@ -1126,9 +1321,24 @@ onBeforeUnmount(() => {
           @pointerleave="releaseButton('home-timer')"
           @click="openTimerPage"
         >
-          <span class="home-icon">⏱</span>
+          <span class="home-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="12" cy="13" r="8" />
+              <path d="M12 9v4l3 2M9 2h6M12 5V2" />
+            </svg>
+          </span>
           <span class="home-title">计时</span>
           <span class="home-subtitle">时间统计</span>
+        </button>
+
+        <button class="home-card home-dashboard-card" type="button" @click="router.push('/dashboard')">
+          <span class="home-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M4 19V9M10 19V5M16 19v-7M22 19H2" />
+            </svg>
+          </span>
+          <span class="home-title">数据看板</span>
+          <span class="home-subtitle">签到与计时统计</span>
         </button>
 
         <button
@@ -1141,9 +1351,14 @@ onBeforeUnmount(() => {
           @pointerleave="releaseButton('home-inventory')"
           @click="openInventoryPage"
         >
-          <span class="home-icon">📦</span>
+          <span class="home-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z" />
+              <path d="m4.5 7.7 7.5 4.2 7.5-4.2M12 12v9M8 5.3l8 4.5" />
+            </svg>
+          </span>
           <span class="home-title">进销存</span>
-          <span class="home-subtitle">商品与库存</span>
+          <span class="home-subtitle">商品与库存管理</span>
         </button>
         <button
           v-if="isAdmin"
@@ -1151,7 +1366,13 @@ onBeforeUnmount(() => {
           type="button"
           @click="router.push('/admin')"
         >
-          <span class="home-icon">👥</span>
+          <span class="home-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M19 8v6M22 11h-6" />
+            </svg>
+          </span>
           <span class="home-title">用户审批</span>
           <span class="home-subtitle">处理注册申请</span>
         </button>
@@ -1162,27 +1383,21 @@ onBeforeUnmount(() => {
           type="button"
           @click="router.push('/super-admin')"
         >
-          <span class="home-icon">⚙️</span>
+          <span class="home-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M10 14v6" />
+              <circle cx="16" cy="7" r="2" />
+              <circle cx="8" cy="17" r="2" />
+            </svg>
+          </span>
           <span class="home-title">管理后台</span>
-          <span class="home-subtitle">用户与审批日志</span>
+          <span class="home-subtitle">系统管理</span>
         </button>
       </main>
     </div>
 
     <div v-else-if="currentScreen === 'attendance'" class="attendance-screen">
-      <header class="header">
-        <button
-          class="nav-back-btn"
-          :class="{ 'is-pressed': pressedButton === 'attendance-back' }"
-          type="button"
-          @pointerdown="pressButton('attendance-back')"
-          @pointerup="releaseButton('attendance-back')"
-          @pointercancel="releaseButton('attendance-back')"
-          @pointerleave="releaseButton('attendance-back')"
-          @click="goHome"
-        >← 返回</button>
-        <h1>上下班签到</h1>
-      </header>
+      <FunctionHeader title="上下班签到" @back="goHome" @sign-out="signOut" />
 
       <main class="screen">
         <div class="date-text">{{ currentDate }}</div>
@@ -1268,20 +1483,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-else class="timer-page">
-      <header class="header">
-        <button
-          class="nav-back-btn"
-          :class="{ 'is-pressed': pressedButton === 'timer-back' }"
-          type="button"
-          @pointerdown="pressButton('timer-back')"
-          @pointerup="releaseButton('timer-back')"
-          @pointercancel="releaseButton('timer-back')"
-          @pointerleave="releaseButton('timer-back')"
-          @click="goHome"
-        >← 返回</button>
-        <h1>计时工具</h1>
-        <button class="sign-out-btn" type="button" @click="signOut">退出</button>
-      </header>
+      <FunctionHeader title="计时工具" @back="goHome" @sign-out="signOut" />
 
       <main class="timer-page-panel">
         <div class="timer-display" aria-live="polite">
@@ -1352,22 +1554,45 @@ onBeforeUnmount(() => {
               @click="resetTimer"
             >重置</button>
           </div>
+          <button
+            class="timer-btn end full-width"
+            :class="{ 'is-pressed': pressedButton === 'timer-end' }"
+            type="button"
+            @pointerdown="pressButton('timer-end')"
+            @pointerup="releaseButton('timer-end')"
+            @pointercancel="releaseButton('timer-end')"
+            @pointerleave="releaseButton('timer-end')"
+            @click="endTimer"
+          >结束计时</button>
         </div>
       </main>
 
       <section class="timer-history-card">
         <div class="timer-history-heading">
           <h2>历史记录</h2>
-          <span v-if="timerHistoryLoading">加载中…</span>
+          <div class="timer-history-actions">
+            <button
+              v-if="selectedTimerRecordIds.length"
+              class="timer-history-delete-selected"
+              type="button"
+              @click="requestDeleteTimerRecords(selectedTimerRecordIds)"
+            >删除已选（{{ selectedTimerRecordIds.length }}）</button>
+            <span v-if="timerHistoryLoading">加载中…</span>
+          </div>
         </div>
         <div v-if="!timerHistoryLoading && !timerHistory.length" class="timer-history-empty">暂无已保存的计时记录</div>
         <ul v-else class="timer-history-list">
           <li v-for="record in timerHistory" :key="record.id">
+            <label class="timer-history-select" :aria-label="`选择 ${formatRecordDate(record.start_time)} 的计时记录`">
+              <input v-model="selectedTimerRecordIds" type="checkbox" :value="record.id" />
+              <span aria-hidden="true"></span>
+            </label>
             <div>
               <strong>{{ formatRecordDate(record.start_time) }}</strong>
               <span>{{ formatRecordTime(record.start_time) }} → {{ formatRecordTime(record.end_time) }}</span>
             </div>
             <b>{{ formatStoredDuration(record) }}</b>
+            <button class="timer-history-delete" type="button" @click="requestDeleteTimerRecords([record.id])">删除</button>
           </li>
         </ul>
       </section>
@@ -1391,6 +1616,16 @@ onBeforeUnmount(() => {
       @close="closeDeleteConfirmation"
       @cancel="closeDeleteConfirmation"
       @confirm="confirmDeleteRecord"
+    />
+
+    <GlassModal
+      v-if="timerDeleteConfirmation.show"
+      :message="timerDeleteConfirmation.recordIds.length === 1 ? '确定删除这条计时记录吗？' : `确定删除选中的 ${timerDeleteConfirmation.recordIds.length} 条计时记录吗？`"
+      cancel-text="取消"
+      confirm-text="删除"
+      @close="closeTimerDeleteConfirmation"
+      @cancel="closeTimerDeleteConfirmation"
+      @confirm="confirmDeleteTimerRecords"
     />
 
     <div v-if="isEditPanelOpen" class="edit-overlay" @click.self="closeEditPanel">
@@ -1438,6 +1673,8 @@ onBeforeUnmount(() => {
             @click="submitEditRecord"
           >保存</button>
         </div>
+      </div>
+    </div>
       </div>
     </div>
   </div>

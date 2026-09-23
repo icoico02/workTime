@@ -3,9 +3,20 @@ create table if not exists public.timer_records (
   user_id uuid not null references auth.users(id) on delete cascade,
   start_time timestamptz not null,
   end_time timestamptz not null,
+  total_milliseconds bigint not null,
   total_seconds integer not null,
   created_at timestamptz not null default now()
 );
+
+alter table public.timer_records
+  add column if not exists total_milliseconds bigint;
+
+update public.timer_records
+set total_milliseconds = total_seconds::bigint * 1000
+where total_milliseconds is null;
+
+alter table public.timer_records
+  alter column total_milliseconds set not null;
 
 alter table public.timer_records enable row level security;
 

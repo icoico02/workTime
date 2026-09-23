@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import FunctionHeader from '../components/FunctionHeader.vue'
 import GlassModal from '../components/GlassModal.vue'
 import { supabase } from '../supabase'
 
@@ -250,11 +251,7 @@ function statusClass(product) {
 
 <template>
   <div class="app-shell inventory-shell">
-    <header class="header inventory-header">
-      <button class="nav-back-btn" type="button" @click="goHome">← 返回</button>
-      <h1>{{ sectionTitle }}</h1>
-      <button class="sign-out-btn" type="button" @click="signOut">退出</button>
-    </header>
+    <FunctionHeader :title="sectionTitle" @back="goHome" @sign-out="signOut" />
 
     <nav class="inventory-nav" aria-label="进销存导航">
       <RouterLink to="/inventory/dashboard">总览</RouterLink>
