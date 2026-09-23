@@ -295,6 +295,12 @@ const editForm = ref({
 })
 
 const isEditPanelOpen = ref(false)
+const isMakeUpPanelOpen = ref(false)
+const makeUpForm = ref({
+  recordDate: '',
+  startTime: '09:00:00',
+  endTime: '18:00:00',
+})
 const currentScreen = ref('home')
 const pressedButton = ref('')
 const router = useRouter()
@@ -1066,6 +1072,81 @@ function closeEditPanel() {
   isEditPanelOpen.value = false
 }
 
+function openMakeUpPanel() {
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  makeUpForm.value = {
+    recordDate: formatDateKey(yesterday),
+    startTime: '09:00:00',
+    endTime: '18:00:00',
+  }
+  isMakeUpPanelOpen.value = true
+}
+
+function closeMakeUpPanel() {
+  isMakeUpPanelOpen.value = false
+}
+
+async function submitMakeUpRecord() {
+  const { recordDate, startTime, endTime } = makeUpForm.value
+  const checkInTime = parseLocalDateTimeToIso(recordDate, startTime)
+  const checkOutTime = parseLocalDateTimeToIso(recordDate, endTime)
+
+  if (!recordDate || !isValidTimeString(startTime) || !isValidTimeString(endTime) || !checkInTime || !checkOutTime) {
+    showTimerWarning('请填写有效的补签日期和时间')
+    return
+  }
+
+  if (recordDate >= todayKey.value) {
+    showTimerWarning('补签仅支持今天之前的日期')
+    return
+  }
+
+  if (new Date(checkOutTime) <= new Date(checkInTime)) {
+    showTimerWarning('下班时间需要晚于上班时间')
+    return
+  }
+
+  if (!supabase || !authUser.value) return
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    showTimerWarning('登录状态已失效，请重新登录。')
+    return
+  }
+
+  const { data: existingRecord, error: queryError } = await supabase
+    .from('attendance_records')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('work_date', recordDate)
+    .maybeSingle()
+
+  if (queryError) {
+    showTimerWarning('补签记录查询失败，请检查网络后重试。')
+    return
+  }
+
+  if (existingRecord) {
+    showTimerWarning('该日期已有签到记录，请使用修改功能')
+    return
+  }
+
+  const { error } = await supabase.from('attendance_records').insert({
+    user_id: user.id,
+    work_date: recordDate,
+    check_in_time: checkInTime,
+    check_out_time: checkOutTime,
+  })
+
+  if (error) {
+    showTimerWarning('补签保存失败，请检查网络后重试。')
+    return
+  }
+
+  await loadAttendanceRecords()
+  closeMakeUpPanel()
+}
+
 async function submitEditRecord() {
   if (!editForm.value.recordDate) {
     showTimerWarning('请选择日期')
@@ -1443,6 +1524,16 @@ onBeforeUnmount(() => {
             @pointerleave="releaseButton('attendance-end')"
             @click="endWork"
           >🔴 下班签到</button>
+          <button
+            class="makeup-btn"
+            :class="{ 'is-pressed': pressedButton === 'attendance-makeup' }"
+            type="button"
+            @pointerdown="pressButton('attendance-makeup')"
+            @pointerup="releaseButton('attendance-makeup')"
+            @pointercancel="releaseButton('attendance-makeup')"
+            @pointerleave="releaseButton('attendance-makeup')"
+            @click="openMakeUpPanel"
+          >补签记录</button>
         </div>
 
         <section class="card history-card">
@@ -1672,6 +1763,36 @@ onBeforeUnmount(() => {
             @pointerleave="releaseButton('edit-save')"
             @click="submitEditRecord"
           >保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="isMakeUpPanelOpen" class="edit-overlay" @click.self="closeMakeUpPanel">
+      <div class="edit-panel">
+        <h3>补签记录</h3>
+
+        <label class="field">
+          <span>补签日期</span>
+          <input v-model="makeUpForm.recordDate" type="date" :max="todayKey" />
+        </label>
+
+        <label class="field">
+          <span>上班时间</span>
+          <div class="time-input-wrap">
+            <input v-model="makeUpForm.startTime" type="time" step="1" />
+          </div>
+        </label>
+
+        <label class="field">
+          <span>下班时间</span>
+          <div class="time-input-wrap">
+            <input v-model="makeUpForm.endTime" type="time" step="1" />
+          </div>
+        </label>
+
+        <div class="edit-actions">
+          <button class="cancel-btn" type="button" @click="closeMakeUpPanel">取消</button>
+          <button class="save-btn" type="button" @click="submitMakeUpRecord">保存补签</button>
         </div>
       </div>
     </div>
