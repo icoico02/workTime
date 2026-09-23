@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import GlassModal from './components/GlassModal.vue'
 
 const STORAGE_KEY = 'attendanceRecords'
@@ -209,6 +210,9 @@ const editForm = ref({
 const isEditPanelOpen = ref(false)
 const currentScreen = ref('home')
 const pressedButton = ref('')
+const router = useRouter()
+const route = useRoute()
+const isInventoryRoute = computed(() => route.path.startsWith('/inventory'))
 
 function pressButton(buttonName) {
   pressedButton.value = buttonName
@@ -279,6 +283,10 @@ function openTimerPage() {
 
 function goHome() {
   currentScreen.value = 'home'
+}
+
+function openInventoryPage() {
+  router.push('/inventory/dashboard')
 }
 
 function startTimer() {
@@ -366,7 +374,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <RouterView v-if="isInventoryRoute" />
+
+  <div v-else class="app-shell">
     <div v-if="currentScreen === 'home'" class="home-screen">
       <header class="header home-header">
         <h1>工作助手</h1>
@@ -401,6 +411,21 @@ onBeforeUnmount(() => {
           <span class="home-icon">⏱</span>
           <span class="home-title">计时</span>
           <span class="home-subtitle">时间统计</span>
+        </button>
+
+        <button
+          class="home-card inventory-card"
+          :class="{ 'is-pressed': pressedButton === 'home-inventory' }"
+          type="button"
+          @pointerdown="pressButton('home-inventory')"
+          @pointerup="releaseButton('home-inventory')"
+          @pointercancel="releaseButton('home-inventory')"
+          @pointerleave="releaseButton('home-inventory')"
+          @click="openInventoryPage"
+        >
+          <span class="home-icon">📦</span>
+          <span class="home-title">进销存</span>
+          <span class="home-subtitle">商品与库存</span>
         </button>
       </main>
     </div>
