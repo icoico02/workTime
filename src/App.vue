@@ -1,14 +1,20 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import GlassModal from './components/GlassModal.vue'
+import { isSupabaseConfigured, supabase } from './supabase'
 
-const STORAGE_KEY = 'attendanceRecords'
+const authUser = ref(null)
+const userProfile = ref(null)
+const authGateMessage = ref('')
+const pendingApprovalCount = ref(0)
+const pendingApprovalLoading = ref(false)
 
 const currentDate = ref(formatDate(new Date()))
 const currentTime = ref(formatTime(new Date()))
 const todayKey = ref(formatDateKey(new Date()))
-const attendanceRecords = ref(loadAttendanceRecords())
+const attendanceRecords = ref([])
+const attendanceLoading = ref(false)
 
 const todayRecord = computed(() => {
   return attendanceRecords.value.find((item) => item.date === todayKey.value) || null
@@ -21,8 +27,8 @@ const workDurationText = computed(() => {
     return '--:--'
   }
 
-  const start = new Date(`${record.date}T${record.startTime}`)
-  const end = new Date(`${record.date}T${record.endTime}`)
+  const start = new Date(record.startTime)
+  const end = new Date(record.endTime)
 
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
     return '--:--'
@@ -36,23 +42,13 @@ const workDurationText = computed(() => {
 })
 
 const historyList = computed(() => {
-  return [...attendanceRecords.value].sort((a, b) => new Date(b.date) - new Date(a.date))
+  return [...attendanceRecords.value].sort((a, b) => {
+    return new Date(b.startTime || b.date) - new Date(a.startTime || a.date)
+  })
 })
 
-function loadAttendanceRecords() {
-  try {
-    const savedRecords = localStorage.getItem(STORAGE_KEY)
-    const parsedRecords = savedRecords ? JSON.parse(savedRecords) : []
-
-    return Array.isArray(parsedRecords) ? parsedRecords : []
-  } catch (error) {
-    console.error('读取签到数据失败:', error)
-    return []
-  }
-}
-
-function saveAttendanceRecords() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(attendanceRecords.value))
+function userStorageKey(key) {
+  return authUser.value ? `${key}:${authUser.value.id}` : ''
 }
 
 function formatDate(date) {
@@ -72,11 +68,12 @@ function formatDateKey(date) {
 }
 
 function formatTime(date) {
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  const seconds = String(date.getSeconds()).padStart(2, '0')
-
-  return `${hours}:${minutes}:${seconds}`
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
 }
 
 function formatShortDate(dateString) {
@@ -94,25 +91,52 @@ function formatWeekday(dateString) {
   return `周${weekdayMap[date.getDay()]}`
 }
 
-function getTodayRecord() {
-  return attendanceRecords.value.find((item) => item.date === todayKey.value) || null
+function formatAttendanceTime(value) {
+  if (!value) return '--:--:--'
+  return formatTime(new Date(value))
 }
 
-function createTodayRecord() {
-  let record = getTodayRecord()
+function parseLocalDateTimeToIso(dateString, timeString) {
+  if (!dateString || !timeString) return null
+  const localDate = new Date(`${dateString}T${timeString}`)
+  return Number.isNaN(localDate.getTime()) ? null : localDate.toISOString()
+}
 
-  if (!record) {
-    record = {
-      date: todayKey.value,
-      startTime: '',
-      endTime: '',
-    }
+function mapAttendanceRecord(record) {
+  return {
+    id: record.id,
+    user_id: record.user_id,
+    date: record.work_date,
+    startTime: record.check_in_time,
+    endTime: record.check_out_time,
+  }
+}
 
-    attendanceRecords.value.unshift(record)
-    saveAttendanceRecords()
+async function loadAttendanceRecords() {
+  if (!supabase || !authUser.value) {
+    attendanceRecords.value = []
+    return
   }
 
-  return record
+  attendanceLoading.value = true
+  const { data, error } = await supabase
+    .from('attendance_records')
+    .select('id, user_id, work_date, check_in_time, check_out_time, created_at')
+    .eq('user_id', authUser.value.id)
+    .order('work_date', { ascending: false })
+
+  attendanceLoading.value = false
+
+  if (error) {
+    showTimerWarning('签到记录加载失败，请检查网络后重试。')
+    return
+  }
+
+  attendanceRecords.value = (data || []).map(mapAttendanceRecord)
+}
+
+function getTodayRecord() {
+  return attendanceRecords.value.find((item) => item.date === todayKey.value) || null
 }
 
 function updateClock() {
@@ -126,33 +150,80 @@ function updateClock() {
   }
 }
 
-function startWork() {
-  const record = createTodayRecord()
-
-  if (record.startTime) {
-    alert('今天已经完成上班签到')
+async function startWork() {
+  if (!supabase || !authUser.value) {
+    showTimerWarning('请先登录后再进行上班签到。')
     return
   }
 
-  record.startTime = currentTime.value
-  saveAttendanceRecords()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    showTimerWarning('登录状态已失效，请重新登录。')
+    return
+  }
+
+  const { data: existingRecord, error: queryError } = await supabase
+    .from('attendance_records')
+    .select('id, user_id, work_date, check_in_time, check_out_time')
+    .eq('user_id', user.id)
+    .eq('work_date', todayKey.value)
+    .maybeSingle()
+
+  if (queryError) {
+    showTimerWarning('签到记录查询失败，请检查网络后重试。')
+    return
+  }
+
+  if (existingRecord?.check_in_time) {
+    showTimerWarning('今天已经完成上班签到')
+    return
+  }
+
+  const { error } = await supabase.from('attendance_records').insert({
+    user_id: user.id,
+    work_date: todayKey.value,
+    check_in_time: new Date().toISOString(),
+  })
+
+  if (error) {
+    showTimerWarning('上班签到失败，请检查网络后重试。')
+    return
+  }
+
+  await loadAttendanceRecords()
 }
 
-function endWork() {
+async function endWork() {
+  if (!supabase || !authUser.value) {
+    showTimerWarning('请先登录后再进行下班签退。')
+    return
+  }
+
+  const { data: { user } } = await supabase.auth.getUser()
   const record = getTodayRecord()
 
-  if (!record || !record.startTime) {
-    alert('请先进行上班签到')
+  if (!user || !record || !record.startTime) {
+    showTimerWarning('请先进行上班签到')
     return
   }
 
   if (record.endTime) {
-    alert('今天已经完成下班签到')
+    showTimerWarning('今天已经完成下班签到')
     return
   }
 
-  record.endTime = currentTime.value
-  saveAttendanceRecords()
+  const { error } = await supabase
+    .from('attendance_records')
+    .update({ check_out_time: new Date().toISOString() })
+    .eq('id', record.id)
+    .eq('user_id', user.id)
+
+  if (error) {
+    showTimerWarning('下班签退失败，请检查网络后重试。')
+    return
+  }
+
+  await loadAttendanceRecords()
 }
 
 function formatWorkDuration(item) {
@@ -160,8 +231,8 @@ function formatWorkDuration(item) {
     return '--:--'
   }
 
-  const start = new Date(`${item.date}T${item.startTime}`)
-  const end = new Date(`${item.date}T${item.endTime}`)
+  const start = new Date(item.startTime)
+  const end = new Date(item.endTime)
 
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
     return '--:--'
@@ -178,26 +249,40 @@ function isValidTimeString(value) {
   return /^\d{2}:\d{2}:\d{2}$/.test(value)
 }
 
-const deleteConfirmation = ref({ show: false, recordDate: '' })
+const deleteConfirmation = ref({ show: false, recordId: '' })
 
-function openDeleteConfirmation(recordDate) {
+function openDeleteConfirmation(recordId) {
   deleteConfirmation.value = {
     show: true,
-    recordDate,
+    recordId,
   }
 }
 
 function closeDeleteConfirmation() {
   deleteConfirmation.value = {
     show: false,
-    recordDate: '',
+    recordId: '',
   }
 }
 
-function confirmDeleteRecord() {
-  const recordDate = deleteConfirmation.value.recordDate
-  attendanceRecords.value = attendanceRecords.value.filter((item) => item.date !== recordDate)
-  saveAttendanceRecords()
+async function confirmDeleteRecord() {
+  if (!supabase || !authUser.value) return
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+
+  const { error } = await supabase
+    .from('attendance_records')
+    .delete()
+    .eq('id', deleteConfirmation.value.recordId)
+    .eq('user_id', user.id)
+
+  if (error) {
+    showTimerWarning('删除签到记录失败，请检查网络后重试。')
+    return
+  }
+
+  await loadAttendanceRecords()
   closeDeleteConfirmation()
 }
 
@@ -213,6 +298,40 @@ const pressedButton = ref('')
 const router = useRouter()
 const route = useRoute()
 const isInventoryRoute = computed(() => route.path.startsWith('/inventory'))
+const isAdminRoute = computed(() => route.path.startsWith('/admin') || route.path.startsWith('/super-admin'))
+const isAdmin = computed(() => ['admin', 'super_admin'].includes(userProfile.value?.role))
+const isSuperAdmin = computed(() => userProfile.value?.role === 'super_admin')
+
+async function loadPendingApprovalCount() {
+  if (!supabase || !authUser.value || !isAdmin.value) {
+    pendingApprovalCount.value = 0
+    return
+  }
+
+  pendingApprovalLoading.value = true
+  const { count, error } = await supabase
+    .from('profiles')
+    .select('id', { count: 'exact', head: true })
+    .eq('approval_status', 'pending')
+  pendingApprovalLoading.value = false
+
+  if (error) {
+    console.error(error)
+    pendingApprovalCount.value = 0
+    return
+  }
+
+  pendingApprovalCount.value = count || 0
+}
+
+function openPendingApprovals() {
+  if (!isAdmin.value) return
+  router.push(isSuperAdmin.value ? '/super-admin?section=pending' : '/admin')
+}
+
+function handlePendingApprovalChanged() {
+  loadPendingApprovalCount()
+}
 
 function pressButton(buttonName) {
   pressedButton.value = buttonName
@@ -228,6 +347,33 @@ const timerRunning = ref(false)
 const timerStartedAt = ref(0)
 const timerElapsedMs = ref(0)
 const timerIntervalId = ref(null)
+const timerSessionStartedAt = ref(0)
+const timerSessionSaved = ref(false)
+const timerHistory = ref([])
+const timerHistoryLoading = ref(false)
+const authLoading = ref(true)
+const loginForm = ref({ username: '', password: '', confirmation: '' })
+const loginError = ref('')
+const loginSubmitting = ref(false)
+const authMode = ref('login')
+const registrationInProgress = ref(false)
+const approvalStatusUsername = ref('')
+const approvalStatusLoading = ref(false)
+const approvalStatusResult = ref(null)
+const authSubscription = ref(null)
+const timerPendingRecord = ref(null)
+const lastTimerSessionPersistAt = ref(0)
+
+watch(approvalStatusUsername, () => {
+  approvalStatusResult.value = null
+  if (authMode.value === 'status') {
+    loginError.value = ''
+  }
+})
+
+function activeTimerStorageKey() {
+  return authUser.value ? `activeTimerSession:${authUser.value.id}` : ''
+}
 
 function formatTimerDisplay(ms) {
   const totalMs = Math.max(0, Math.floor(ms))
@@ -258,12 +404,14 @@ const timerDisplayParts = computed(() => {
 })
 
 const timerWarning = ref({ show: false, message: '' })
+const timerWarningAction = ref(null)
 
 function showTimerWarning(message) {
   timerWarning.value = {
     show: true,
     message,
   }
+  timerWarningAction.value = null
 }
 
 function closeTimerWarning() {
@@ -271,6 +419,389 @@ function closeTimerWarning() {
     show: false,
     message: '',
   }
+  timerWarningAction.value = null
+}
+
+function saveActiveTimerSession() {
+  const storageKey = activeTimerStorageKey()
+
+  if (!storageKey) {
+    return
+  }
+
+  if (!timerSessionStartedAt.value) {
+    localStorage.removeItem(storageKey)
+    return
+  }
+
+  localStorage.setItem(storageKey, JSON.stringify({
+    startedAt: timerSessionStartedAt.value,
+    elapsedMs: timerElapsedMs.value,
+    running: timerRunning.value,
+    saved: timerSessionSaved.value,
+  }))
+}
+
+function restoreActiveTimerSession() {
+  try {
+    const storageKey = activeTimerStorageKey()
+    if (!storageKey) return
+
+    const saved = localStorage.getItem(storageKey)
+    const session = saved ? JSON.parse(saved) : null
+
+    if (!session?.startedAt) {
+      return
+    }
+
+    timerSessionStartedAt.value = Number(session.startedAt)
+    timerSessionSaved.value = Boolean(session.saved)
+    timerElapsedMs.value = Number(session.elapsedMs || 0)
+
+    if (session.running) {
+      timerStartedAt.value = Date.now() - timerElapsedMs.value
+      timerRunning.value = true
+      startTimerInterval()
+    }
+  } catch (error) {
+    console.error('恢复计时状态失败:', error)
+    const storageKey = activeTimerStorageKey()
+    if (storageKey) localStorage.removeItem(storageKey)
+  }
+}
+
+function formatRecordTime(value) {
+  if (!value) return '--:--:--'
+  return new Date(value).toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function formatRecordDate(value) {
+  if (!value) return '--'
+  return new Date(value).toLocaleDateString('zh-CN')
+}
+
+function formatStoredDuration(record) {
+  const start = new Date(record.start_time).getTime()
+  const end = new Date(record.end_time).getTime()
+  const elapsed = Number.isFinite(start) && Number.isFinite(end)
+    ? Math.max(0, end - start)
+    : Number(record.total_seconds || 0) * 1000
+  return formatTimerDisplay(elapsed)
+}
+
+async function loadTimerHistory() {
+  if (!supabase || !authUser.value) {
+    timerHistory.value = []
+    return
+  }
+
+  timerHistoryLoading.value = true
+  const { data, error } = await supabase
+    .from('timer_records')
+    .select('*')
+    .eq('user_id', authUser.value.id)
+    .order('created_at', { ascending: false })
+
+  timerHistoryLoading.value = false
+
+  if (error) {
+    showTimerWarning('历史记录加载失败，请检查网络后重试。')
+    return
+  }
+
+  timerHistory.value = data || []
+}
+
+async function loadCurrentProfile(user) {
+  if (!supabase || !user) return null
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, username, role, approval_status, created_at')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  if (error) {
+    console.error(error)
+    authGateMessage.value = '用户资料加载失败，请稍后重试。'
+    return null
+  }
+
+  return data
+}
+
+async function handleAuthSession(session) {
+  if (!session?.user) {
+    authUser.value = null
+    userProfile.value = null
+    return false
+  }
+
+  const profile = await loadCurrentProfile(session.user)
+  const status = profile?.approval_status
+
+  if (!profile || status !== 'approved') {
+    if (status === 'pending') {
+      authGateMessage.value = '您的账号正在等待管理员审批。'
+    } else if (status === 'rejected') {
+      authGateMessage.value = '您的注册申请未通过审批。'
+    } else if (!profile) {
+      authGateMessage.value = '用户资料不存在，请联系管理员。'
+    }
+
+    await supabase.auth.signOut()
+    authUser.value = null
+    userProfile.value = null
+    return false
+  }
+
+  authGateMessage.value = ''
+  authUser.value = session.user
+  userProfile.value = profile
+  currentScreen.value = 'home'
+  resetViewportScroll()
+  if (isInventoryRoute.value || isAdminRoute.value) {
+    await router.replace('/')
+  }
+  return true
+}
+
+async function signIn() {
+  loginError.value = ''
+
+  if (!supabase) {
+    loginError.value = '登录服务尚未配置'
+    return
+  }
+
+  const username = loginForm.value.username.trim()
+  const password = loginForm.value.password
+
+  if (!username || !password) {
+    loginError.value = '请输入账号和密码'
+    return
+  }
+
+  loginSubmitting.value = true
+  const { error } = await supabase.auth.signInWithPassword({
+    email: `${username}@attendance.local`,
+    password,
+  })
+  loginSubmitting.value = false
+
+  if (error) {
+    loginError.value = '账号或密码错误'
+    return
+  }
+
+  loginForm.value.password = ''
+  loginForm.value.confirmation = ''
+}
+
+async function signUp() {
+  loginError.value = ''
+
+  if (!supabase) {
+    loginError.value = '登录服务尚未配置'
+    return
+  }
+
+  const username = loginForm.value.username.trim()
+  const password = loginForm.value.password
+  const confirmation = loginForm.value.confirmation
+
+  if (!username || !password || !confirmation) {
+    loginError.value = '请完整填写注册信息'
+    return
+  }
+
+  if (!/^[a-zA-Z0-9._-]+$/.test(username)) {
+    loginError.value = '账号只能包含字母、数字、点、下划线或短横线'
+    return
+  }
+
+  if (password.length < 6) {
+    loginError.value = '密码至少需要 6 位'
+    return
+  }
+
+  if (password !== confirmation) {
+    loginError.value = '两次输入的密码不一致'
+    return
+  }
+
+  registrationInProgress.value = true
+  loginSubmitting.value = true
+  const { data, error } = await supabase.auth.signUp({
+    email: `${username}@attendance.local`,
+    password,
+  })
+  loginSubmitting.value = false
+
+  if (error) {
+    registrationInProgress.value = false
+    if (error.code === 'user_already_exists' || error.message?.toLowerCase().includes('already registered')) {
+      loginError.value = '账号已存在，请直接登录'
+    } else if (error.code === 'signup_disabled') {
+      loginError.value = '当前暂未开放注册，请联系管理员'
+    } else if (error.code === 'email_address_invalid') {
+      loginError.value = '账号格式无效，请更换账号后重试'
+    } else if (error.code === 'weak_password') {
+      loginError.value = '密码强度不足，请使用至少 6 位密码'
+    } else {
+      loginError.value = '注册失败，请检查 Supabase Auth 配置'
+    }
+    return
+  }
+
+  const registeredUser = data.user
+  if (!registeredUser) {
+    registrationInProgress.value = false
+    loginError.value = '注册失败，未获取到用户信息'
+    return
+  }
+
+  const { error: profileError } = await supabase
+    .from('profiles')
+    .update({ username })
+    .eq('id', registeredUser.id)
+
+  registrationInProgress.value = false
+
+  if (profileError) {
+    console.error(profileError)
+    loginError.value = '注册失败，用户资料保存失败，请稍后重试'
+    return
+  }
+
+  if (data.session) {
+    await supabase.auth.signOut()
+  }
+
+  loginForm.value = { username: '', password: '', confirmation: '' }
+  loginError.value = '注册申请已提交，请等待管理员审批。'
+  authMode.value = 'login'
+}
+
+function openApprovalStatusQuery() {
+  authMode.value = 'status'
+  loginError.value = ''
+  approvalStatusUsername.value = ''
+  approvalStatusResult.value = null
+}
+
+function closeApprovalStatusQuery() {
+  authMode.value = 'login'
+  loginError.value = ''
+  approvalStatusUsername.value = ''
+  approvalStatusResult.value = null
+}
+
+async function checkApprovalStatus() {
+  loginError.value = ''
+  approvalStatusResult.value = null
+
+  if (!supabase) {
+    loginError.value = '查询服务尚未配置'
+    return
+  }
+
+  const username = approvalStatusUsername.value.trim()
+  if (!username || !/^[a-zA-Z0-9._-]+$/.test(username)) {
+    loginError.value = '请输入正确的用户名'
+    return
+  }
+
+  approvalStatusLoading.value = true
+  const { data, error } = await supabase.rpc('check_approval_status', {
+    p_username: username,
+  })
+  approvalStatusLoading.value = false
+
+  if (error) {
+    console.error(error)
+    loginError.value = '未找到该账号，请确认用户名是否正确。'
+    return
+  }
+
+  const result = Array.isArray(data) ? data[0] : data
+  const approvalStatus = result?.approval_status
+  if (!['pending', 'approved', 'rejected'].includes(approvalStatus)) {
+    loginError.value = '未找到该账号，请确认用户名是否正确。'
+    return
+  }
+
+  approvalStatusResult.value = {
+    status: approvalStatus,
+    reason: result.rejection_reason || result.reason || '',
+  }
+}
+
+async function signOut() {
+  const storageKey = activeTimerStorageKey()
+  if (supabase) {
+    await supabase.auth.signOut()
+  }
+  if (storageKey) localStorage.removeItem(storageKey)
+  authUser.value = null
+  userProfile.value = null
+  pendingApprovalCount.value = 0
+  timerHistory.value = []
+}
+
+async function saveTimerRecord() {
+  if (timerSessionSaved.value || !timerSessionStartedAt.value || !supabase) {
+    return true
+  }
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    timerPendingRecord.value = null
+    showTimerWarning('登录状态已失效，请重新登录。')
+    return false
+  }
+
+  const endTime = new Date()
+  const totalSeconds = Math.floor(timerElapsedMs.value / 1000)
+  const record = {
+    user_id: user.id,
+    start_time: new Date(timerSessionStartedAt.value).toISOString(),
+    end_time: endTime.toISOString(),
+    total_seconds: totalSeconds,
+  }
+
+  const { error } = await supabase.from('timer_records').insert(record)
+  if (error) {
+    timerPendingRecord.value = record
+    timerWarning.value = { show: true, message: '记录保存失败，请检查网络后重试。' }
+    timerWarningAction.value = 'retry'
+    return false
+  }
+
+  timerSessionSaved.value = true
+  timerPendingRecord.value = null
+  saveActiveTimerSession()
+  await loadTimerHistory()
+  timerWarning.value = { show: true, message: '记录已保存' }
+  timerWarningAction.value = null
+  return true
+}
+
+async function retryTimerRecord() {
+  if (!timerPendingRecord.value || !supabase) return
+
+  const { error } = await supabase.from('timer_records').insert(timerPendingRecord.value)
+  if (error) {
+    showTimerWarning('记录保存失败，请检查网络后重试。')
+    timerWarningAction.value = 'retry'
+    return
+  }
+
+  timerSessionSaved.value = true
+  timerPendingRecord.value = null
+  saveActiveTimerSession()
+  await loadTimerHistory()
+  showTimerWarning('记录已保存')
 }
 
 function openAttendancePage() {
@@ -283,10 +814,26 @@ function openTimerPage() {
 
 function goHome() {
   currentScreen.value = 'home'
+  loadPendingApprovalCount()
 }
 
 function openInventoryPage() {
   router.push('/inventory/dashboard')
+}
+
+function resetViewportScroll() {
+  window.requestAnimationFrame(() => window.scrollTo(0, 0))
+}
+
+function startTimerInterval() {
+  clearInterval(timerIntervalId.value)
+  timerIntervalId.value = setInterval(() => {
+    timerElapsedMs.value = Date.now() - timerStartedAt.value
+    if (Date.now() - lastTimerSessionPersistAt.value >= 250) {
+      saveActiveTimerSession()
+      lastTimerSessionPersistAt.value = Date.now()
+    }
+  }, 10)
 }
 
 function startTimer() {
@@ -294,15 +841,20 @@ function startTimer() {
     return
   }
 
+  if (!timerSessionStartedAt.value || timerSessionSaved.value) {
+    timerSessionStartedAt.value = Date.now()
+    timerSessionSaved.value = false
+    timerElapsedMs.value = 0
+  }
+
   timerStartedAt.value = Date.now() - timerElapsedMs.value
   timerRunning.value = true
-
-  timerIntervalId.value = setInterval(() => {
-    timerElapsedMs.value = Date.now() - timerStartedAt.value
-  }, 10)
+  saveActiveTimerSession()
+  lastTimerSessionPersistAt.value = Date.now()
+  startTimerInterval()
 }
 
-function pauseTimer() {
+async function pauseTimer() {
   if (!timerRunning.value) {
     return
   }
@@ -311,6 +863,9 @@ function pauseTimer() {
   clearInterval(timerIntervalId.value)
   timerIntervalId.value = null
   timerElapsedMs.value = Date.now() - timerStartedAt.value
+  saveActiveTimerSession()
+  lastTimerSessionPersistAt.value = Date.now()
+  await saveTimerRecord()
 }
 
 function resetTimer() {
@@ -329,58 +884,196 @@ function resetTimer() {
   timerIntervalId.value = null
   timerElapsedMs.value = 0
   timerStartedAt.value = 0
+  timerSessionStartedAt.value = 0
+  timerSessionSaved.value = false
+  timerPendingRecord.value = null
+  const storageKey = activeTimerStorageKey()
+  if (storageKey) localStorage.removeItem(storageKey)
 }
 
 function openEditPanel(record) {
   editForm.value = {
     recordDate: record.date,
-    startTime: record.startTime || '08:00:00',
-    endTime: record.endTime || '18:00:00',
+    startTime: record.startTime ? formatEditTime(record.startTime) : '08:00:00',
+    endTime: record.endTime ? formatEditTime(record.endTime) : '18:00:00',
+    recordId: record.id,
   }
   isEditPanelOpen.value = true
+}
+
+function formatEditTime(value) {
+  return formatTime(new Date(value))
 }
 
 function closeEditPanel() {
   isEditPanelOpen.value = false
 }
 
-function submitEditRecord() {
+async function submitEditRecord() {
   if (!editForm.value.recordDate) {
-    alert('请选择日期')
+    showTimerWarning('请选择日期')
     return
   }
 
-  const targetRecord = attendanceRecords.value.find((item) => item.date === editForm.value.recordDate)
+  if (!supabase || !authUser.value) return
+  const { data: { user } } = await supabase.auth.getUser()
+  const targetRecord = attendanceRecords.value.find((item) => item.id === editForm.value.recordId)
 
-  if (!targetRecord) {
-    alert('未找到对应日期记录')
+  if (!user || !targetRecord) {
+    showTimerWarning('未找到对应日期记录')
     return
   }
 
-  targetRecord.startTime = editForm.value.startTime || ''
-  targetRecord.endTime = editForm.value.endTime || ''
-  saveAttendanceRecords()
+  const { error } = await supabase
+    .from('attendance_records')
+    .update({
+      work_date: editForm.value.recordDate,
+      check_in_time: parseLocalDateTimeToIso(editForm.value.recordDate, editForm.value.startTime),
+      check_out_time: parseLocalDateTimeToIso(editForm.value.recordDate, editForm.value.endTime),
+    })
+    .eq('id', targetRecord.id)
+    .eq('user_id', user.id)
+
+  if (error) {
+    showTimerWarning('修改签到记录失败，请检查网络后重试。')
+    return
+  }
+
+  await loadAttendanceRecords()
   closeEditPanel()
 }
 
-onMounted(() => {
+onMounted(async () => {
   updateClock()
   setInterval(updateClock, 1000)
+
+  if (!supabase) {
+    authLoading.value = false
+    return
+  }
+
+  const { data: { session } } = await supabase.auth.getSession()
+  const approved = await handleAuthSession(session)
+  authLoading.value = false
+
+  if (approved && authUser.value) {
+    if (isInventoryRoute.value) {
+      await router.replace('/')
+    }
+    await loadAttendanceRecords()
+    restoreActiveTimerSession()
+    await loadTimerHistory()
+    await loadPendingApprovalCount()
+  }
+
+  const { data } = supabase.auth.onAuthStateChange((event, sessionState) => {
+    if (registrationInProgress.value) {
+      return
+    }
+
+    window.setTimeout(async () => {
+      const approvedSession = await handleAuthSession(sessionState)
+      if (approvedSession && authUser.value) {
+        await loadAttendanceRecords()
+        await loadTimerHistory()
+        await loadPendingApprovalCount()
+      } else {
+        currentScreen.value = 'home'
+        attendanceRecords.value = []
+        pendingApprovalCount.value = 0
+        timerHistory.value = []
+      }
+    }, 0)
+  })
+  authSubscription.value = data.subscription
+  window.addEventListener('pending-approval-changed', handlePendingApprovalChanged)
 })
 
 onBeforeUnmount(() => {
   clearInterval(timerIntervalId.value)
+  authSubscription.value?.unsubscribe()
+  window.removeEventListener('pending-approval-changed', handlePendingApprovalChanged)
 })
 </script>
 
 <template>
-  <RouterView v-if="isInventoryRoute" />
+  <div v-if="authLoading" class="auth-shell auth-loading-shell">
+    <div class="auth-glass-card"><p>正在检查登录状态…</p></div>
+  </div>
+
+  <main v-else-if="!authUser" class="auth-shell">
+    <section class="auth-glass-card">
+      <p class="auth-eyebrow">PERSONAL WORKSPACE</p>
+      <h1>{{ authMode === 'login' ? '系统登录' : authMode === 'register' ? '创建账号' : '查询审批状态' }}</h1>
+      <p class="auth-description">{{ authMode === 'status' ? '输入用户名查看注册申请状态' : '登录后访问全部工作功能' }}</p>
+
+      <form v-if="authMode === 'status'" class="auth-form" @submit.prevent="checkApprovalStatus">
+        <label>
+          <span>用户名</span>
+          <input v-model="approvalStatusUsername" type="text" autocomplete="username" placeholder="请输入用户名" />
+        </label>
+        <p v-if="loginError" class="auth-error" role="alert">{{ loginError }}</p>
+        <div v-if="approvalStatusResult" class="approval-status-result">
+          <strong v-if="approvalStatusResult.status === 'pending'" class="approval-pending">🟠 待审批</strong>
+          <strong v-else-if="approvalStatusResult.status === 'approved'" class="approval-approved">🟢 已通过</strong>
+          <strong v-else-if="approvalStatusResult.status === 'rejected'" class="approval-rejected">🔴 已拒绝</strong>
+          <p v-if="approvalStatusResult.status === 'pending'">您的账号正在等待管理员审批，审批通过后即可登录系统。</p>
+          <p v-else-if="approvalStatusResult.status === 'approved'">您的账号已经通过审批，可以登录系统。</p>
+          <p v-else-if="approvalStatusResult.status === 'rejected'">该账号暂未通过审批。</p>
+          <p v-if="approvalStatusResult.status === 'rejected' && approvalStatusResult.reason" class="approval-reason">拒绝原因：{{ approvalStatusResult.reason }}</p>
+        </div>
+        <button class="auth-submit-btn" type="submit" :disabled="approvalStatusLoading">
+          {{ approvalStatusLoading ? '查询中…' : '查询状态' }}
+        </button>
+        <button class="auth-mode-btn" type="button" @click="closeApprovalStatusQuery">← 返回登录</button>
+      </form>
+
+      <form v-else class="auth-form" @submit.prevent="authMode === 'login' ? signIn() : signUp()">
+        <label>
+          <span>账号</span>
+          <input v-model="loginForm.username" type="text" autocomplete="username" placeholder="请输入账号" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input v-model="loginForm.password" type="password" autocomplete="current-password" placeholder="请输入密码" />
+        </label>
+        <label v-if="authMode === 'register'">
+          <span>确认密码</span>
+          <input v-model="loginForm.confirmation" type="password" autocomplete="new-password" placeholder="请再次输入密码" />
+        </label>
+        <p v-if="loginError || authGateMessage" class="auth-error" role="alert">{{ loginError || authGateMessage }}</p>
+        <button class="auth-submit-btn" type="submit" :disabled="loginSubmitting">
+          {{ loginSubmitting ? '处理中…' : authMode === 'login' ? '登录' : '注册' }}
+        </button>
+      </form>
+      <button v-if="authMode !== 'status'" class="auth-mode-btn" type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'; loginError = ''">
+        {{ authMode === 'login' ? '还没有账号？注册' : '已有账号？返回登录' }}
+      </button>
+      <button v-if="authMode === 'login'" class="auth-status-link" type="button" @click="openApprovalStatusQuery">🔍 查询审批状态</button>
+    </section>
+  </main>
+
+  <RouterView v-else-if="isInventoryRoute || isAdminRoute" />
 
   <div v-else class="app-shell">
     <div v-if="currentScreen === 'home'" class="home-screen">
       <header class="header home-header">
         <h1>工作助手</h1>
+        <p class="home-welcome">欢迎回来，{{ authUser?.email?.split('@')[0] || '用户' }}</p>
+        <button class="sign-out-btn" type="button" @click="signOut">退出登录</button>
       </header>
+
+      <section v-if="isAdmin && pendingApprovalCount > 0" class="pending-approval-banner">
+        <div>
+          <strong>🔔 有 {{ pendingApprovalCount }} 位新用户等待审批</strong>
+          <span>请及时处理</span>
+        </div>
+        <button type="button" @click="openPendingApprovals">立即处理</button>
+      </section>
+
+      <button v-if="isAdmin && pendingApprovalCount > 0" class="pending-approval-entry" type="button" @click="openPendingApprovals">
+        待审批 <span>{{ pendingApprovalCount }}</span>
+      </button>
 
       <main class="home-grid">
         <button
@@ -427,6 +1120,27 @@ onBeforeUnmount(() => {
           <span class="home-title">进销存</span>
           <span class="home-subtitle">商品与库存</span>
         </button>
+        <button
+          v-if="isAdmin"
+          class="home-card admin-card"
+          type="button"
+          @click="router.push('/admin')"
+        >
+          <span class="home-icon">👥</span>
+          <span class="home-title">用户审批</span>
+          <span class="home-subtitle">处理注册申请</span>
+        </button>
+
+        <button
+          v-if="isSuperAdmin"
+          class="home-card super-admin-card"
+          type="button"
+          @click="router.push('/super-admin')"
+        >
+          <span class="home-icon">⚙️</span>
+          <span class="home-title">管理后台</span>
+          <span class="home-subtitle">用户与审批日志</span>
+        </button>
       </main>
     </div>
 
@@ -454,12 +1168,12 @@ onBeforeUnmount(() => {
 
           <div class="info-row">
             <span>上班时间</span>
-            <strong>{{ todayRecord && todayRecord.startTime ? todayRecord.startTime : '--:--:--' }}</strong>
+            <strong>{{ todayRecord ? formatAttendanceTime(todayRecord.startTime) : '--:--:--' }}</strong>
           </div>
 
           <div class="info-row">
             <span>下班时间</span>
-            <strong>{{ todayRecord && todayRecord.endTime ? todayRecord.endTime : '--:--:--' }}</strong>
+            <strong>{{ todayRecord ? formatAttendanceTime(todayRecord.endTime) : '--:--:--' }}</strong>
           </div>
 
           <div class="info-row">
@@ -497,8 +1211,8 @@ onBeforeUnmount(() => {
           <ul class="history-list">
             <li v-for="item in historyList" :key="item.date" class="history-item">
               <span>{{ formatShortDate(item.date) }} {{ formatWeekday(item.date) }}</span>
-              <span>{{ item.startTime || '--:--' }}</span>
-              <span>{{ item.endTime || '--:--' }}</span>
+              <span>{{ item.startTime ? formatAttendanceTime(item.startTime) : '--:--' }}</span>
+              <span>{{ item.endTime ? formatAttendanceTime(item.endTime) : '--:--' }}</span>
               <span>{{ formatWorkDuration(item) }}</span>
               <div class="record-actions">
                 <button
@@ -519,7 +1233,7 @@ onBeforeUnmount(() => {
                   @pointerup="releaseButton(`delete-${item.date}`)"
                   @pointercancel="releaseButton(`delete-${item.date}`)"
                   @pointerleave="releaseButton(`delete-${item.date}`)"
-                  @click="openDeleteConfirmation(item.date)"
+                  @click="openDeleteConfirmation(item.id)"
                 >删除</button>
               </div>
             </li>
@@ -541,6 +1255,7 @@ onBeforeUnmount(() => {
           @click="goHome"
         >← 返回</button>
         <h1>计时工具</h1>
+        <button class="sign-out-btn" type="button" @click="signOut">退出</button>
       </header>
 
       <main class="timer-page-panel">
@@ -614,12 +1329,33 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </main>
+
+      <section class="timer-history-card">
+        <div class="timer-history-heading">
+          <h2>历史记录</h2>
+          <span v-if="timerHistoryLoading">加载中…</span>
+        </div>
+        <div v-if="!timerHistoryLoading && !timerHistory.length" class="timer-history-empty">暂无已保存的计时记录</div>
+        <ul v-else class="timer-history-list">
+          <li v-for="record in timerHistory" :key="record.id">
+            <div>
+              <strong>{{ formatRecordDate(record.start_time) }}</strong>
+              <span>{{ formatRecordTime(record.start_time) }} → {{ formatRecordTime(record.end_time) }}</span>
+            </div>
+            <b>{{ formatStoredDuration(record) }}</b>
+          </li>
+        </ul>
+      </section>
     </div>
 
     <GlassModal
       v-if="timerWarning.show"
       :message="timerWarning.message"
+      :cancel-text="timerWarningAction === 'retry' ? '关闭' : ''"
+      :confirm-text="timerWarningAction === 'retry' ? '重试' : '知道了'"
       @close="closeTimerWarning"
+      @cancel="closeTimerWarning"
+      @confirm="timerWarningAction === 'retry' ? retryTimerRecord() : closeTimerWarning()"
     />
 
     <GlassModal

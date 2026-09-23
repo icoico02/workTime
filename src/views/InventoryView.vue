@@ -1,7 +1,8 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import GlassModal from '../components/GlassModal.vue'
+import { supabase } from '../supabase'
 
 const PRODUCTS_KEY = 'inventoryProducts'
 const LOGS_KEY = 'inventoryOperationLogs'
@@ -19,8 +20,9 @@ function loadStorage(key, fallback) {
   }
 }
 
-const products = ref(loadStorage(PRODUCTS_KEY, []))
-const operationLogs = ref(loadStorage(LOGS_KEY, []))
+const currentUserId = ref('')
+const products = ref([])
+const operationLogs = ref([])
 const productForm = ref(emptyProduct())
 const movementForm = ref(emptyMovement())
 const editingProductId = ref('')
@@ -35,9 +37,17 @@ function emptyMovement() {
   return { productId: '', quantity: '', operatedAt: toDateTimeLocal(new Date()) }
 }
 
+function userStorageKey(key) {
+  return currentUserId.value ? `${key}:${currentUserId.value}` : ''
+}
+
 function saveData() {
-  localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products.value))
-  localStorage.setItem(LOGS_KEY, JSON.stringify(operationLogs.value))
+  const productsKey = userStorageKey(PRODUCTS_KEY)
+  const logsKey = userStorageKey(LOGS_KEY)
+  if (!productsKey || !logsKey) return
+
+  localStorage.setItem(productsKey, JSON.stringify(products.value))
+  localStorage.setItem(logsKey, JSON.stringify(operationLogs.value))
 }
 
 function toDateTimeLocal(date) {
@@ -61,9 +71,28 @@ function recordLog(type, product, quantity = '') {
     productName: product.name,
     productCode: product.code,
     quantity,
+    user_id: currentUserId.value,
     operatedAt: toDateTimeLocal(new Date()),
   })
 }
+
+onMounted(async () => {
+  if (!supabase) return
+
+  const { data: { user } } = await supabase.auth.getUser()
+  currentUserId.value = user?.id || ''
+
+  if (currentUserId.value) {
+    products.value = loadStorage(userStorageKey(PRODUCTS_KEY), []).map((product) => ({
+      ...product,
+      user_id: product.user_id || currentUserId.value,
+    }))
+    operationLogs.value = loadStorage(userStorageKey(LOGS_KEY), []).map((log) => ({
+      ...log,
+      user_id: log.user_id || currentUserId.value,
+    }))
+  }
+})
 
 const currentSection = computed(() => route.params.section || 'dashboard')
 const sectionTitle = computed(() => ({
@@ -94,6 +123,11 @@ function goHome() {
   router.push('/')
 }
 
+async function signOut() {
+  if (supabase) await supabase.auth.signOut()
+  router.push('/')
+}
+
 function openProductForm(product = null) {
   editingProductId.value = product?.id || ''
   productForm.value = product
@@ -120,6 +154,7 @@ function saveProduct() {
     price: Number(productForm.value.price || 0),
     stock: Number(productForm.value.stock || 0),
     lowStockThreshold: Number(productForm.value.lowStockThreshold || 0),
+    user_id: currentUserId.value,
   }
 
   if (editingProductId.value) {
@@ -192,6 +227,7 @@ function submitMovement(type) {
     productName: product.name,
     productCode: product.code,
     quantity,
+    user_id: currentUserId.value,
     operatedAt: movementForm.value.operatedAt || toDateTimeLocal(new Date()),
   })
   saveData()
@@ -217,6 +253,7 @@ function statusClass(product) {
     <header class="header inventory-header">
       <button class="nav-back-btn" type="button" @click="goHome">← 返回</button>
       <h1>{{ sectionTitle }}</h1>
+      <button class="sign-out-btn" type="button" @click="signOut">退出</button>
     </header>
 
     <nav class="inventory-nav" aria-label="进销存导航">

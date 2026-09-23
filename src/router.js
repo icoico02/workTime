@@ -1,10 +1,13 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import InventoryView from './views/InventoryView.vue'
+import AdminView from './views/AdminView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/inventory/:section?', component: InventoryView },
+    { path: '/admin', component: AdminView },
+    { path: '/super-admin', component: AdminView },
   ],
 })
 
