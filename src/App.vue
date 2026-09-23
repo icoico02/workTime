@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import GlassModal from './components/GlassModal.vue'
 
 const STORAGE_KEY = 'attendanceRecords'
 
@@ -176,15 +177,27 @@ function isValidTimeString(value) {
   return /^\d{2}:\d{2}:\d{2}$/.test(value)
 }
 
-function deleteRecord(recordDate) {
-  const confirmed = window.confirm('确定删除这条签到记录吗？')
+const deleteConfirmation = ref({ show: false, recordDate: '' })
 
-  if (!confirmed) {
-    return
+function openDeleteConfirmation(recordDate) {
+  deleteConfirmation.value = {
+    show: true,
+    recordDate,
   }
+}
 
+function closeDeleteConfirmation() {
+  deleteConfirmation.value = {
+    show: false,
+    recordDate: '',
+  }
+}
+
+function confirmDeleteRecord() {
+  const recordDate = deleteConfirmation.value.recordDate
   attendanceRecords.value = attendanceRecords.value.filter((item) => item.date !== recordDate)
   saveAttendanceRecords()
+  closeDeleteConfirmation()
 }
 
 const editForm = ref({
@@ -195,6 +208,17 @@ const editForm = ref({
 
 const isEditPanelOpen = ref(false)
 const currentScreen = ref('home')
+const pressedButton = ref('')
+
+function pressButton(buttonName) {
+  pressedButton.value = buttonName
+}
+
+function releaseButton(buttonName) {
+  if (pressedButton.value === buttonName) {
+    pressedButton.value = ''
+  }
+}
 
 const timerRunning = ref(false)
 const timerStartedAt = ref(0)
@@ -218,11 +242,32 @@ const timerDisplayParts = computed(() => {
   const match = text.match(/^(\d{2})h\s+(\d{2})m\s+(\d{2})s\s+(\d{3})ms$/)
 
   if (!match) {
-    return ['00', '00', '00', '000']
+    return ['0', '0', '0', '0', '0', '0', '0', '0', '0']
   }
 
-  return [match[1], match[2], match[3], match[4]]
+  return [
+    ...match[1].split(''),
+    ...match[2].split(''),
+    ...match[3].split(''),
+    ...match[4].split(''),
+  ]
 })
+
+const timerWarning = ref({ show: false, message: '' })
+
+function showTimerWarning(message) {
+  timerWarning.value = {
+    show: true,
+    message,
+  }
+}
+
+function closeTimerWarning() {
+  timerWarning.value = {
+    show: false,
+    message: '',
+  }
+}
 
 function openAttendancePage() {
   currentScreen.value = 'attendance'
@@ -262,12 +307,12 @@ function pauseTimer() {
 
 function resetTimer() {
   if (timerRunning.value) {
-    alert('计时中，请先暂停，再重置')
+    showTimerWarning('计时中，请先暂停，再重置')
     return
   }
 
   if (timerElapsedMs.value === 0) {
-    alert('当前计时器已是初始状态，无需重置')
+    showTimerWarning('当前计时器已是初始状态，无需重置')
     return
   }
 
@@ -328,13 +373,31 @@ onBeforeUnmount(() => {
       </header>
 
       <main class="home-grid">
-        <button class="home-card attendance-card" type="button" @click="openAttendancePage">
+        <button
+          class="home-card attendance-card"
+          :class="{ 'is-pressed': pressedButton === 'home-attendance' }"
+          type="button"
+          @pointerdown="pressButton('home-attendance')"
+          @pointerup="releaseButton('home-attendance')"
+          @pointercancel="releaseButton('home-attendance')"
+          @pointerleave="releaseButton('home-attendance')"
+          @click="openAttendancePage"
+        >
           <span class="home-icon">✅</span>
           <span class="home-title">签到</span>
           <span class="home-subtitle">上下班打卡</span>
         </button>
 
-        <button class="home-card timer-card" type="button" @click="openTimerPage">
+        <button
+          class="home-card timer-card"
+          :class="{ 'is-pressed': pressedButton === 'home-timer' }"
+          type="button"
+          @pointerdown="pressButton('home-timer')"
+          @pointerup="releaseButton('home-timer')"
+          @pointercancel="releaseButton('home-timer')"
+          @pointerleave="releaseButton('home-timer')"
+          @click="openTimerPage"
+        >
           <span class="home-icon">⏱</span>
           <span class="home-title">计时</span>
           <span class="home-subtitle">时间统计</span>
@@ -344,7 +407,16 @@ onBeforeUnmount(() => {
 
     <div v-else-if="currentScreen === 'attendance'" class="attendance-screen">
       <header class="header">
-        <button class="nav-back-btn" type="button" @click="goHome">← 返回</button>
+        <button
+          class="nav-back-btn"
+          :class="{ 'is-pressed': pressedButton === 'attendance-back' }"
+          type="button"
+          @pointerdown="pressButton('attendance-back')"
+          @pointerup="releaseButton('attendance-back')"
+          @pointercancel="releaseButton('attendance-back')"
+          @pointerleave="releaseButton('attendance-back')"
+          @click="goHome"
+        >← 返回</button>
         <h1>上下班签到</h1>
       </header>
 
@@ -372,8 +444,26 @@ onBeforeUnmount(() => {
         </section>
 
         <div class="button-group">
-          <button class="action-btn start-btn" type="button" @click="startWork">🟢 上班签到</button>
-          <button class="action-btn end-btn" type="button" @click="endWork">🔴 下班签到</button>
+          <button
+            class="action-btn start-btn"
+            :class="{ 'is-pressed': pressedButton === 'attendance-start' }"
+            type="button"
+            @pointerdown="pressButton('attendance-start')"
+            @pointerup="releaseButton('attendance-start')"
+            @pointercancel="releaseButton('attendance-start')"
+            @pointerleave="releaseButton('attendance-start')"
+            @click="startWork"
+          >🟢 上班签到</button>
+          <button
+            class="action-btn end-btn"
+            :class="{ 'is-pressed': pressedButton === 'attendance-end' }"
+            type="button"
+            @pointerdown="pressButton('attendance-end')"
+            @pointerup="releaseButton('attendance-end')"
+            @pointercancel="releaseButton('attendance-end')"
+            @pointerleave="releaseButton('attendance-end')"
+            @click="endWork"
+          >🔴 下班签到</button>
         </div>
 
         <section class="card history-card">
@@ -386,8 +476,26 @@ onBeforeUnmount(() => {
               <span>{{ item.endTime || '--:--' }}</span>
               <span>{{ formatWorkDuration(item) }}</span>
               <div class="record-actions">
-                <button class="mini-btn edit-btn" type="button" @click="openEditPanel(item)">修改</button>
-                <button class="mini-btn delete-btn" type="button" @click="deleteRecord(item.date)">删除</button>
+                <button
+                  class="mini-btn edit-btn"
+                  :class="{ 'is-pressed': pressedButton === `edit-${item.date}` }"
+                  type="button"
+                  @pointerdown="pressButton(`edit-${item.date}`)"
+                  @pointerup="releaseButton(`edit-${item.date}`)"
+                  @pointercancel="releaseButton(`edit-${item.date}`)"
+                  @pointerleave="releaseButton(`edit-${item.date}`)"
+                  @click="openEditPanel(item)"
+                >修改</button>
+                <button
+                  class="mini-btn delete-btn"
+                  :class="{ 'is-pressed': pressedButton === `delete-${item.date}` }"
+                  type="button"
+                  @pointerdown="pressButton(`delete-${item.date}`)"
+                  @pointerup="releaseButton(`delete-${item.date}`)"
+                  @pointercancel="releaseButton(`delete-${item.date}`)"
+                  @pointerleave="releaseButton(`delete-${item.date}`)"
+                  @click="openDeleteConfirmation(item.date)"
+                >删除</button>
               </div>
             </li>
           </ul>
@@ -397,31 +505,107 @@ onBeforeUnmount(() => {
 
     <div v-else class="timer-page">
       <header class="header">
-        <button class="nav-back-btn" type="button" @click="goHome">← 返回</button>
+        <button
+          class="nav-back-btn"
+          :class="{ 'is-pressed': pressedButton === 'timer-back' }"
+          type="button"
+          @pointerdown="pressButton('timer-back')"
+          @pointerup="releaseButton('timer-back')"
+          @pointercancel="releaseButton('timer-back')"
+          @pointerleave="releaseButton('timer-back')"
+          @click="goHome"
+        >← 返回</button>
         <h1>计时工具</h1>
       </header>
 
       <main class="timer-page-panel">
         <div class="timer-display" aria-live="polite">
-          <span class="timer-unit timer-hour">{{ timerDisplayParts[0] }}</span>
-          <span class="timer-label">h</span>
-          <span class="timer-unit">{{ timerDisplayParts[1] }}</span>
-          <span class="timer-label">m</span>
-          <span class="timer-unit">{{ timerDisplayParts[2] }}</span>
-          <span class="timer-label">s</span>
-          <span class="timer-unit timer-ms">{{ timerDisplayParts[3] }}</span>
-          <span class="timer-label">ms</span>
+          <div class="timer-group">
+            <div class="timer-digits">
+              <span class="timer-unit timer-digit">{{ timerDisplayParts[0] }}</span>
+              <span class="timer-unit timer-digit">{{ timerDisplayParts[1] }}</span>
+            </div>
+            <span class="timer-label">h</span>
+          </div>
+
+          <div class="timer-group">
+            <div class="timer-digits">
+              <span class="timer-unit timer-digit">{{ timerDisplayParts[2] }}</span>
+              <span class="timer-unit timer-digit">{{ timerDisplayParts[3] }}</span>
+            </div>
+            <span class="timer-label">m</span>
+          </div>
+
+          <div class="timer-group">
+            <div class="timer-digits">
+              <span class="timer-unit timer-digit">{{ timerDisplayParts[4] }}</span>
+              <span class="timer-unit timer-digit">{{ timerDisplayParts[5] }}</span>
+            </div>
+            <span class="timer-label">s</span>
+          </div>
+
+          <div class="timer-group timer-group-ms">
+            <div class="timer-digits">
+              <span class="timer-unit timer-ms-digit">{{ timerDisplayParts[6] }}</span>
+              <span class="timer-unit timer-ms-digit">{{ timerDisplayParts[7] }}</span>
+              <span class="timer-unit timer-ms-digit">{{ timerDisplayParts[8] }}</span>
+            </div>
+            <span class="timer-label">ms</span>
+          </div>
         </div>
 
         <div class="timer-actions">
-          <button class="timer-btn start full-width" type="button" @click="startTimer">开始</button>
+          <button
+            class="timer-btn start full-width"
+            :class="{ 'is-pressed': pressedButton === 'timer-start' }"
+            type="button"
+            @pointerdown="pressButton('timer-start')"
+            @pointerup="releaseButton('timer-start')"
+            @pointercancel="releaseButton('timer-start')"
+            @pointerleave="releaseButton('timer-start')"
+            @click="startTimer"
+          >开始</button>
           <div class="timer-secondary-row">
-            <button class="timer-btn pause" type="button" @click="pauseTimer">暂停</button>
-            <button class="timer-btn reset" type="button" @click="resetTimer">重置</button>
+            <button
+              class="timer-btn pause"
+              :class="{ 'is-pressed': pressedButton === 'timer-pause' }"
+              type="button"
+              @pointerdown="pressButton('timer-pause')"
+              @pointerup="releaseButton('timer-pause')"
+              @pointercancel="releaseButton('timer-pause')"
+              @pointerleave="releaseButton('timer-pause')"
+              @click="pauseTimer"
+            >暂停</button>
+            <button
+              class="timer-btn reset"
+              :class="{ 'is-pressed': pressedButton === 'timer-reset' }"
+              type="button"
+              @pointerdown="pressButton('timer-reset')"
+              @pointerup="releaseButton('timer-reset')"
+              @pointercancel="releaseButton('timer-reset')"
+              @pointerleave="releaseButton('timer-reset')"
+              @click="resetTimer"
+            >重置</button>
           </div>
         </div>
       </main>
     </div>
+
+    <GlassModal
+      v-if="timerWarning.show"
+      :message="timerWarning.message"
+      @close="closeTimerWarning"
+    />
+
+    <GlassModal
+      v-if="deleteConfirmation.show"
+      message="确定删除这条签到记录吗？"
+      cancel-text="取消"
+      confirm-text="好"
+      @close="closeDeleteConfirmation"
+      @cancel="closeDeleteConfirmation"
+      @confirm="confirmDeleteRecord"
+    />
 
     <div v-if="isEditPanelOpen" class="edit-overlay" @click.self="closeEditPanel">
       <div class="edit-panel">
@@ -447,8 +631,26 @@ onBeforeUnmount(() => {
         </label>
 
         <div class="edit-actions">
-          <button class="cancel-btn" type="button" @click="closeEditPanel">取消</button>
-          <button class="save-btn" type="button" @click="submitEditRecord">保存</button>
+          <button
+            class="cancel-btn"
+            :class="{ 'is-pressed': pressedButton === 'edit-cancel' }"
+            type="button"
+            @pointerdown="pressButton('edit-cancel')"
+            @pointerup="releaseButton('edit-cancel')"
+            @pointercancel="releaseButton('edit-cancel')"
+            @pointerleave="releaseButton('edit-cancel')"
+            @click="closeEditPanel"
+          >取消</button>
+          <button
+            class="save-btn"
+            :class="{ 'is-pressed': pressedButton === 'edit-save' }"
+            type="button"
+            @pointerdown="pressButton('edit-save')"
+            @pointerup="releaseButton('edit-save')"
+            @pointercancel="releaseButton('edit-save')"
+            @pointerleave="releaseButton('edit-save')"
+            @click="submitEditRecord"
+          >保存</button>
         </div>
       </div>
     </div>
