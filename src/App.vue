@@ -1055,10 +1055,10 @@ onBeforeUnmount(() => {
         </label>
         <label v-if="authMode === 'login'" class="remember-device">
           <input v-model="rememberDevice" type="checkbox" />
+          <span class="remember-device-text">记住此设备</span>
           <span class="switch-track" aria-hidden="true">
             <span class="switch-thumb"></span>
           </span>
-          <span class="remember-device-text">记住此设备</span>
         </label>
         <label v-if="authMode === 'register'">
           <span>确认密码</span>
@@ -1069,10 +1069,12 @@ onBeforeUnmount(() => {
           {{ loginSubmitting ? '处理中…' : authMode === 'login' ? '登录' : '注册' }}
         </button>
       </form>
-      <button v-if="authMode !== 'status'" class="auth-mode-btn" type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'; loginError = ''">
-        {{ authMode === 'login' ? '还没有账号？注册' : '已有账号？返回登录' }}
-      </button>
-      <button v-if="authMode === 'login'" class="auth-status-link" type="button" @click="openApprovalStatusQuery">🔍 查询审批状态</button>
+      <div v-if="authMode !== 'status'" class="auth-footer-actions">
+        <button class="auth-mode-btn" type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'; loginError = ''">
+          {{ authMode === 'login' ? '还没有账号？注册' : '已有账号？返回登录' }}
+        </button>
+        <button v-if="authMode === 'login'" class="auth-status-link" type="button" @click="openApprovalStatusQuery">🔍 查询审批状态</button>
+      </div>
     </section>
   </main>
 

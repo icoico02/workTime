@@ -1,6 +1,10 @@
 :root {
   --ios-bg-1: #eef3fb;
   --ios-bg-2: #f8f9fd;
+  --page-background:
+    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.95), transparent 30%),
+    radial-gradient(circle at 80% 30%, rgba(173, 216, 255, 0.38), transparent 40%),
+    linear-gradient(135deg, #eef2f7 0%, #f4f6fb 55%, #f9fafc 100%);
   --glass-bg: rgba(255, 255, 255, 0.45);
   --glass-border: rgba(255, 255, 255, 0.7);
   --glass-highlight: rgba(255, 255, 255, 0.65);
@@ -30,7 +34,11 @@
 html, body, #app {
   margin: 0;
   min-height: 100%;
-  height: 100%;
+  min-height: 100dvh;
+  background-color: var(--ios-bg-1);
+  background-image: var(--page-background);
+  background-repeat: no-repeat;
+  background-size: cover;
 }
 
 html {
@@ -39,11 +47,6 @@ html {
 }
 
 body {
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.95), transparent 30%),
-    radial-gradient(circle at 80% 30%, rgba(173, 216, 255, 0.38), transparent 40%),
-    linear-gradient(135deg, #eef2f7 0%, #f4f6fb 55%, #f9fafc 100%);
   overflow-x: hidden;
 }
 
@@ -92,8 +95,14 @@ button.is-pressed {
 #app {
   display: flex;
   justify-content: center;
-  align-items: flex-start;
-  padding: 20px 12px;
+  align-items: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding:
+    max(20px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(20px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
 }
 
 .app-shell {
@@ -106,27 +115,33 @@ button.is-pressed {
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-height: calc(100vh - 40px);
-  padding: 24px 12px;
-  background:
-    radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.9), transparent 34%),
-    radial-gradient(circle at 82% 78%, rgba(173, 216, 255, 0.42), transparent 40%);
+  min-height: calc(100vh - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom)));
+  min-height: calc(100dvh - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom)));
+  padding: 0;
 }
 
 .auth-loading-shell {
-  min-height: 100vh;
+  min-height: calc(100vh - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom)));
+  min-height: calc(100dvh - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom)));
 }
 
 .auth-glass-card {
-  width: min(390px, 100%);
-  padding: 36px 28px 30px;
+  width: min(370px, 100%);
+  max-height: 100%;
+  padding: 28px 24px 22px;
   border: 1px solid rgba(255, 255, 255, 0.74);
-  border-radius: 30px;
+  border-radius: 26px;
   background: rgba(255, 255, 255, 0.48);
   backdrop-filter: blur(28px) saturate(170%);
   -webkit-backdrop-filter: blur(28px) saturate(170%);
   box-shadow: 0 24px 60px rgba(31, 41, 55, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.84);
   text-align: center;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.auth-glass-card::-webkit-scrollbar {
+  display: none;
 }
 
 .auth-eyebrow {
@@ -140,11 +155,11 @@ button.is-pressed {
 .auth-glass-card h1 {
   margin: 0;
   color: #273244;
-  font-size: 2rem;
+  font-size: 1.82rem;
 }
 
 .auth-description {
-  margin: 9px 0 28px;
+  margin: 7px 0 22px;
   color: #718097;
   font-size: 0.9rem;
 }
@@ -152,7 +167,7 @@ button.is-pressed {
 .auth-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 13px;
   text-align: left;
 }
 
@@ -169,7 +184,7 @@ button.is-pressed {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.72);
   border-radius: 13px;
-  padding: 13px 14px;
+  padding: 12px 14px;
   color: #273244;
   background: rgba(255, 255, 255, 0.44);
   outline: none;
@@ -182,10 +197,10 @@ button.is-pressed {
 }
 
 .auth-submit-btn {
-  margin-top: 5px;
+  margin-top: 2px;
   border: 1px solid rgba(255, 255, 255, 0.55);
   border-radius: 14px;
-  padding: 13px 16px;
+  padding: 11px 16px;
   color: #fff;
   background: linear-gradient(180deg, rgba(59, 130, 246, 0.82), rgba(37, 99, 235, 0.64));
   font-weight: 800;
@@ -205,7 +220,6 @@ button.is-pressed {
 }
 
 .auth-mode-btn {
-  margin-top: 18px;
   border: 0;
   color: #536074;
   background: transparent;
@@ -219,7 +233,6 @@ button.is-pressed {
 }
 
 .auth-status-link {
-  margin-top: 8px;
   border: 0;
   color: #536074;
   background: transparent;
@@ -231,6 +244,20 @@ button.is-pressed {
 .auth-status-link:active {
   transform: scale(0.97);
   filter: brightness(0.9);
+}
+
+.auth-footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 15px;
+  white-space: nowrap;
+}
+
+.auth-footer-actions button {
+  flex: 0 0 auto;
+  padding: 0;
 }
 
 .approval-status-result {
@@ -272,9 +299,9 @@ button.is-pressed {
 .remember-device {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: -4px 0 2px;
+  justify-content: center;
+  gap: 10px;
+  margin: -2px 0 0;
   padding: 0;
   cursor: pointer;
   user-select: none;
@@ -303,18 +330,18 @@ button.is-pressed {
 .switch-track {
   position: relative;
   flex: 0 0 auto;
-  width: 44px;
-  height: 26px;
+  width: 46px;
+  height: 28px;
   border-radius: 999px;
-  background: rgba(209, 213, 219, 0.6);
+  background: rgba(209, 213, 219, 0.82);
   box-shadow:
     inset 0 1px 2px rgba(0, 0, 0, 0.06),
     0 1px 0 rgba(255, 255, 255, 0.55);
   transition: background 0.2s ease, box-shadow 0.2s ease;
 }
 
-.remember-device input:checked + .switch-track {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.82), rgba(37, 99, 235, 0.64));
+.remember-device input:checked ~ .switch-track {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.96), rgba(37, 99, 235, 0.86));
   box-shadow:
     inset 0 1px 2px rgba(0, 0, 0, 0.08),
     0 1px 0 rgba(255, 255, 255, 0.5);
@@ -322,8 +349,8 @@ button.is-pressed {
 
 .switch-thumb {
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: 3px;
+  left: 3px;
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -333,11 +360,11 @@ button.is-pressed {
   will-change: transform;
 }
 
-.remember-device input:checked + .switch-track .switch-thumb {
+.remember-device input:checked ~ .switch-track .switch-thumb {
   transform: translateX(18px);
 }
 
-.remember-device input:focus-visible + .switch-track {
+.remember-device input:focus-visible ~ .switch-track {
   outline: 2px solid rgba(59, 130, 246, 0.5);
   outline-offset: 2px;
 }
