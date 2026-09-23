@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import GlassModal from './components/GlassModal.vue'
-import { isSupabaseConfigured, supabase } from './supabase'
+import { AUTH_STORAGE_KEY, authStorage, isSupabaseConfigured, supabase } from './supabase'
 
 const authUser = ref(null)
 const userProfile = ref(null)
@@ -352,6 +352,7 @@ const timerSessionSaved = ref(false)
 const timerHistory = ref([])
 const timerHistoryLoading = ref(false)
 const authLoading = ref(true)
+const rememberDevice = ref(true)
 const loginForm = ref({ username: '', password: '', confirmation: '' })
 const loginError = ref('')
 const loginSubmitting = ref(false)
@@ -534,6 +535,7 @@ async function handleAuthSession(session) {
   if (!session?.user) {
     authUser.value = null
     userProfile.value = null
+    authStorage.setMode('local')
     return false
   }
 
@@ -552,6 +554,7 @@ async function handleAuthSession(session) {
     await supabase.auth.signOut()
     authUser.value = null
     userProfile.value = null
+    authStorage.setMode('local')
     return false
   }
 
@@ -581,6 +584,8 @@ async function signIn() {
     loginError.value = '请输入账号和密码'
     return
   }
+
+  migrateSessionToStorage(rememberDevice.value ? 'local' : 'session')
 
   loginSubmitting.value = true
   const { error } = await supabase.auth.signInWithPassword({
@@ -632,6 +637,7 @@ async function signUp() {
 
   registrationInProgress.value = true
   loginSubmitting.value = true
+  migrateSessionToStorage('local')
   const { data, error } = await supabase.auth.signUp({
     email: `${username}@attendance.local`,
     password,
@@ -891,6 +897,12 @@ function resetTimer() {
   if (storageKey) localStorage.removeItem(storageKey)
 }
 
+function migrateSessionToStorage(mode) {
+  if (!supabase || !authStorage.getItem(AUTH_STORAGE_KEY)) return
+  if (authStorage.getMode() === mode) return
+  authStorage.setMode(mode)
+}
+
 function openEditPanel(record) {
   editForm.value = {
     recordDate: record.date,
@@ -974,7 +986,11 @@ onMounted(async () => {
     window.setTimeout(async () => {
       const approvedSession = await handleAuthSession(sessionState)
       if (approvedSession && authUser.value) {
+        if (isInventoryRoute.value) {
+          await router.replace('/')
+        }
         await loadAttendanceRecords()
+        restoreActiveTimerSession()
         await loadTimerHistory()
         await loadPendingApprovalCount()
       } else {
@@ -1036,6 +1052,13 @@ onBeforeUnmount(() => {
         <label>
           <span>密码</span>
           <input v-model="loginForm.password" type="password" autocomplete="current-password" placeholder="请输入密码" />
+        </label>
+        <label v-if="authMode === 'login'" class="remember-device">
+          <input v-model="rememberDevice" type="checkbox" />
+          <span class="switch-track" aria-hidden="true">
+            <span class="switch-thumb"></span>
+          </span>
+          <span class="remember-device-text">记住此设备</span>
         </label>
         <label v-if="authMode === 'register'">
           <span>确认密码</span>
