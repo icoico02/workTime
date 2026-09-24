@@ -111,7 +111,7 @@ begin
 end $$;
 
 create or replace function public.inventory_create_sale(p_items jsonb, p_payment_method text default 'cash', p_discount numeric default 0, p_note text default null, p_request_key uuid default gen_random_uuid())
-returns uuid language plpgsql security invoker set search_path = public as $$
+returns uuid language plpgsql security definer set search_path = public as $$
 declare item jsonb; p public.inventory_products; oid uuid; q integer; price numeric; subtotal numeric := 0; cost numeric := 0; final_total numeric; doc_no text;
 begin
   select order_id into oid from inventory_movements where user_id = auth.uid() and operation_key = p_request_key limit 1;
@@ -155,7 +155,7 @@ begin
 end $$;
 
 create or replace function public.inventory_create_sale_return(p_order_id uuid, p_items jsonb, p_refund_amount numeric, p_refund_method text, p_reason text, p_note text default null, p_request_key uuid default gen_random_uuid())
-returns uuid language plpgsql security invoker set search_path = public as $$
+returns uuid language plpgsql security definer set search_path = public as $$
 declare item jsonb; oi public.inventory_order_items; p public.inventory_products; rid uuid; q integer; condition text; calc_refund numeric := 0; returned_cost numeric := 0; total_returned integer := 0; original_count integer; returned_count integer; doc_no text; order_row public.inventory_orders; allocated numeric;
 begin
   select id into rid from inventory_returns where user_id = auth.uid() and request_key = p_request_key;

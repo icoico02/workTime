@@ -225,3 +225,9 @@ grant execute on function public.inventory_current_organization_id() to authenti
 grant execute on function public.inventory_has_role(text[]) to authenticated;
 grant execute on function public.inventory_create_organization(text) to authenticated;
 grant execute on function public.inventory_add_organization_member(uuid, text) to authenticated;
+
+-- Return RPCs write several inventory tables atomically. They must bypass the
+-- caller's table RLS after organization membership has been verified by the
+-- function's own user and organization checks.
+alter function public.inventory_create_sale_return(uuid, jsonb, numeric, text, text, text, uuid) security definer;
+alter function public.inventory_create_walk_in_return(uuid, integer, numeric, text, text, text, text, uuid) security definer;

@@ -1,0 +1,80 @@
+// Run with: node tests/inventory-profit-security.mjs /path/to/pglite/dist/index.js
+import fs from 'node:fs'
+import assert from 'node:assert/strict'
+const { PGlite } = await import(process.argv[2])
+const db = new PGlite()
+await db.exec(`create role anon; create role authenticated; create schema auth;
+create table auth.users(id uuid primary key);
+create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+grant usage on schema auth to authenticated,anon;
+grant execute on function auth.uid() to authenticated,anon;`)
+for (const file of ['inventory.sql', 'inventory_returns.sql', 'inventory_organizations.sql', 'inventory_orders.sql', 'inventory_batches.sql', 'inventory_profit_controls.sql']) {
+  // Existing migrations have a circular dependency on this column.
+  if (file === 'inventory_organizations.sql') await db.exec('alter table public.inventory_orders add column salesperson_id uuid')
+  await db.exec(fs.readFileSync(new URL('../supabase/' + file, import.meta.url), 'utf8'))
+}
+await db.exec(fs.readFileSync(new URL('../supabase/inventory_profit_controls.sql', import.meta.url), 'utf8'))
+const ids = Array.from({ length: 9 }, (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`)
+const [owner, admin, sales, warehouse, user, outsider, org, otherOrg, product] = ids
+for (const id of ids.slice(0, 6)) await db.query('insert into auth.users values ($1)', [id])
+await db.query("insert into inventory_organizations(id,name,owner_id) values ($1,'Store',$2),($3,'Other',$4)", [org, owner, otherOrg, outsider])
+for (const [id, role] of [[owner, 'super_admin'], [admin, 'admin'], [sales, 'salesperson'], [warehouse, 'warehouse'], [user, 'user'], [outsider, 'super_admin']]) {
+  await db.query('insert into inventory_organization_members(organization_id,user_id,role) values($1,$2,$3)', [id === outsider ? otherOrg : org, id, role])
+}
+await db.query("insert into inventory_products(id,user_id,organization_id,name,sku,cost_price,sale_price,stock) values ($1,$2,$3,'Product','SKU',83.71,100,10)", [product, owner, org])
+await db.query("insert into inventory_movements(user_id,organization_id,product_id,operation_type,quantity,unit_cost,total_amount) values ($1,$2,$3,'inbound',10,83.71,837.10)", [owner, org, product])
+await db.exec('grant select,insert,update,delete on all tables in schema public to authenticated; grant usage on schema public to authenticated,anon;')
+async function login(id) {
+  await db.exec('reset role')
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)", [id])
+  await db.exec('set role authenticated')
+}
+async function rpc(resource, id = null) {
+  return (await db.query('select inventory_read($1,$2) as data', [resource, id])).rows[0].data
+}
+const prohibited = new Set(['cost_price', 'unit_cost', 'actual_cost', 'total_cost', 'total_profit', 'line_profit', 'net_profit', 'reference_price', 'latest_price'])
+function noCosts(value) {
+  if (!value || typeof value !== 'object') return
+  for (const [key, nested] of Object.entries(value)) { assert.ok(!prohibited.has(key), key); noCosts(nested) }
+}
+await login(owner)
+const order = (await db.query("select inventory_create_order($1::jsonb) as id", [JSON.stringify([{ product_id: product, quantity: 1, unit_price: 100 }])])).rows[0].id
+assert.equal((await rpc('products'))[0].cost_price, 83.71)
+const itemId = (await rpc('orders', order))[0].inventory_order_items[0].id
+await db.exec('reset role')
+await db.query("update inventory_orders set order_status='completed', salesperson_id=$2 where id=$1", [order, sales])
+await login(owner)
+try {
+  await db.query("select inventory_create_sale_return($1,$2::jsonb,0,'cash','test')", [order, JSON.stringify([{ order_item_id: itemId, condition: 'resellable' }])])
+  assert.fail('Malformed return should fail')
+} catch (error) {
+  assert.doesNotMatch(JSON.stringify(error), /83\.71|Failing row contains/)
+}
+await db.query('select inventory_profit_settings($1::jsonb)', [JSON.stringify({ minimum_unit_profit: 20, minimum_margin: 18, amount_warning_enabled: true, margin_warning_enabled: false })])
+for (const id of [admin, sales, warehouse, user]) {
+  await login(id)
+  assert.equal((await db.query('select cost_price from inventory_products')).rows.length, 0)
+  assert.equal((await db.query('select total_cost from inventory_orders')).rows.length, 0)
+  for (const resource of ['products', 'orders', 'returns', 'movements']) noCosts(await rpc(resource))
+  const inbound = (await rpc('movements')).find(row => row.operation_type === 'inbound')
+  assert.equal(inbound.total_amount, undefined)
+  await assert.rejects(() => db.query('select inventory_profit_settings()'), /Not allowed/)
+  await assert.rejects(() => db.query('select inventory_profit_settings($1::jsonb)', ['{}']), /Not allowed/)
+  await assert.rejects(() => db.query("select inventory_receive($1,1,1,'supplier',null,gen_random_uuid())", [product]), /Only super_admin/)
+}
+await login(sales)
+assert.equal((await rpc('orders', order)).length, 1)
+noCosts(await rpc('orders', order))
+await login(admin)
+await db.query("select inventory_save_product(p_product_id=>$1,p_name=>'Edited',p_sku=>'SKU',p_sale_price=>100,p_cost_price=>0)", [product])
+await login(owner)
+assert.equal((await rpc('products'))[0].cost_price, 83.71)
+assert.equal((await db.query('select inventory_profit_settings() as data')).rows[0].data.minimum_unit_profit, 20)
+await assert.rejects(() => db.query('select inventory_profit_settings($1::jsonb)', [JSON.stringify({ minimum_unit_profit: -1, minimum_margin: 15, amount_warning_enabled: true, margin_warning_enabled: true })]), /check constraint/)
+await login(outsider)
+assert.deepEqual(await rpc('products', product), [])
+assert.deepEqual(await rpc('orders', order), [])
+await db.exec('reset role; set role anon;')
+await assert.rejects(() => rpc('products'), /permission denied/)
+await db.close()
+console.log('PASS migrations twice; super/admin/sales/warehouse/user/outsider/anonymous reads; settings permissions; admin edit preserves cost')

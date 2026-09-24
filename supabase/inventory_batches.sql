@@ -63,6 +63,14 @@ alter table public.inventory_order_items add column if not exists actual_cost nu
 create index if not exists inventory_batches_product_fifo_idx on public.inventory_purchase_batches(organization_id, product_id, supplier_id, received_at, id) where remaining_quantity > 0;
 create index if not exists inventory_batch_allocations_item_idx on public.inventory_order_item_batch_allocations(order_item_id);
 
+-- Sales created before the formal-order workflow already deducted inventory.
+-- Mark them fulfilled so they can enter the normal return workflow.
+update public.inventory_orders
+set fulfillment_status = 'fulfilled', fulfilled_at = coalesce(fulfilled_at, created_at)
+where order_status = 'completed'
+  and fulfillment_status = 'not_fulfilled'
+  and exists (select 1 from public.inventory_movements m where m.order_id = inventory_orders.id and m.operation_type = 'sale');
+
 -- Existing on-hand inventory becomes a traceable opening batch. It preserves
 -- the recorded historical cost while all new stock gets its own purchase batch.
 insert into public.inventory_suppliers(organization_id, name, note)
