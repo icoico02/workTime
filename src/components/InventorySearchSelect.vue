@@ -6,6 +6,7 @@ const props = defineProps({
   options: { type: Array, default: () => [] },
   placeholder: { type: String, default: '输入搜索' },
   allowCustom: { type: Boolean, default: false },
+  emptyText: { type: String, default: '没有匹配的商品' },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -19,7 +20,10 @@ const filtered = computed(() => {
   return props.options.filter((item) => `${item.label} ${item.description || ''}`.toLowerCase().includes(keyword)).slice(0, 12)
 })
 
-watch(selected, (item) => { if (!open.value) query.value = item?.label || '' }, { immediate: true })
+watch(() => props.modelValue, (value) => {
+  if (open.value) return
+  query.value = selected.value?.label || (props.allowCustom ? value : '')
+}, { immediate: true })
 
 function choose(item) {
   query.value = item.label
@@ -62,7 +66,7 @@ onBeforeUnmount(() => window.clearTimeout())
     <button v-if="modelValue" type="button" class="inventory-search-clear" aria-label="清除选择" @mousedown.prevent @click="choose({ id: '', label: '' })">×</button>
     <div v-if="open" class="inventory-search-options">
       <button v-for="item in filtered" :key="item.id" type="button" @mousedown.prevent @click="choose(item)"><strong>{{ item.label }}</strong><small>{{ item.description }}</small></button>
-      <p v-if="!filtered.length">没有匹配的商品</p>
+      <p v-if="!filtered.length">{{ emptyText }}</p>
     </div>
   </div>
 </template>

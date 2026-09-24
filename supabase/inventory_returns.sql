@@ -98,7 +98,12 @@ create policy "Users manage own inventory returns" on public.inventory_returns f
 create policy "Users view own return items" on public.inventory_return_items for select to authenticated using (exists (select 1 from public.inventory_returns r where r.id = return_id and r.user_id = auth.uid()));
 create policy "Users add own return items" on public.inventory_return_items for insert to authenticated with check (exists (select 1 from public.inventory_returns r where r.id = return_id and r.user_id = auth.uid()));
 
-create or replace function public.inventory_next_no(p_prefix text)
+-- Bootstrap personal installations only; preserve the organization allocator.
+do $bootstrap$
+begin
+  if to_regprocedure('public.inventory_next_no(text)') is null then
+    execute $definition$
+create function public.inventory_next_no(p_prefix text)
 returns text language plpgsql security invoker set search_path = public as $$
 declare next_value integer; today date := current_date;
 begin
@@ -109,6 +114,9 @@ begin
   returning last_number into next_value;
   return p_prefix || to_char(today, 'YYYYMMDD') || lpad(next_value::text, 4, '0');
 end $$;
+    $definition$;
+  end if;
+end $bootstrap$;
 
 create or replace function public.inventory_create_sale(p_items jsonb, p_payment_method text default 'cash', p_discount numeric default 0, p_note text default null, p_request_key uuid default gen_random_uuid())
 returns uuid language plpgsql security definer set search_path = public as $$
@@ -141,7 +149,12 @@ begin
   return oid;
 end $$;
 
-create or replace function public.inventory_receive(p_product_id uuid,p_quantity integer,p_unit_cost numeric,p_supplier text default null,p_note text default null,p_request_key uuid default gen_random_uuid())
+-- Preserve the organization/batch implementation when replaying this migration.
+do $receive_bootstrap$
+begin
+  if to_regprocedure('public.inventory_receive(uuid,integer,numeric,text,text,uuid)') is null then
+    execute $definition$
+create function public.inventory_receive(p_product_id uuid,p_quantity integer,p_unit_cost numeric,p_supplier text default null,p_note text default null,p_request_key uuid default gen_random_uuid())
 returns uuid language plpgsql security invoker set search_path=public as $$
 declare p public.inventory_products; mid uuid; doc_no text;
 begin
@@ -153,6 +166,9 @@ begin
   values(auth.uid(),p.id,'inbound',p_quantity,p_unit_cost,p_quantity*p_unit_cost,p_supplier,p_note,p.stock,p.stock+p_quantity,'purchase_inbound',doc_no,p_request_key) returning id into mid;
   update inventory_movements set business_id=mid where id=mid; return mid;
 end $$;
+    $definition$;
+  end if;
+end $receive_bootstrap$;
 
 create or replace function public.inventory_create_sale_return(p_order_id uuid, p_items jsonb, p_refund_amount numeric, p_refund_method text, p_reason text, p_note text default null, p_request_key uuid default gen_random_uuid())
 returns uuid language plpgsql security definer set search_path = public as $$
@@ -206,6 +222,8 @@ begin
   where id = p_order_id;
   update inventory_movements set business_type='sale_return', business_id=rid, original_business_id=p_order_id, original_business_no=order_row.order_no where user_id=auth.uid() and operation_key=p_request_key;
   return rid;
+exception when others then
+  raise exception '%', sqlerrm;
 end $$;
 
 create or replace function public.inventory_create_walk_in_return(p_product_id uuid, p_quantity integer, p_refund_amount numeric, p_refund_method text, p_reason text, p_condition text, p_note text default null, p_request_key uuid default gen_random_uuid())
@@ -226,6 +244,8 @@ begin
   end if;
   update inventory_movements set business_type='sale_return', business_id=rid where user_id=auth.uid() and operation_key=p_request_key;
   return rid;
+exception when others then
+  raise exception '%', sqlerrm;
 end $$;
 
 create or replace function public.inventory_resolve_pending(p_product_id uuid,p_quantity integer,p_action text,p_reason text,p_request_key uuid default gen_random_uuid())

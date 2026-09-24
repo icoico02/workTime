@@ -116,7 +116,8 @@ declare
   doc_no text;
   batch_no text;
 begin
-  if oid is null or not public.inventory_has_role(array['super_admin','admin','warehouse']) then raise exception 'Not allowed'; end if;
+  -- Purchase costs are a super-admin-only write as well as a read concern.
+  if oid is null or not public.inventory_has_role(array['super_admin']) then raise exception 'Not allowed'; end if;
   if coalesce(trim(p_supplier), '') = '' then raise exception 'Supplier is required'; end if;
   select id into mid from public.inventory_movements where organization_id = oid and operation_key = p_request_key limit 1;
   if mid is not null then return mid; end if;

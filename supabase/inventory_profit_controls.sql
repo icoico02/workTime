@@ -50,12 +50,11 @@ begin
         from public.inventory_order_items i left join public.inventory_suppliers s on s.id = i.source_supplier_id and s.organization_id = org where i.order_id = o.id
       ), '[]'::jsonb)) order by o.created_at desc), '[]') into result
     from (select * from public.inventory_orders where organization_id = org and (p_id is null or id = p_id)
-      and (team or user_id = auth.uid() or salesperson_id = auth.uid()) order by created_at desc limit 500) o;
+      order by created_at desc limit 500) o;
   elsif p_resource = 'returns' then
     select coalesce(jsonb_agg(public.inventory_public_fields(to_jsonb(r), array['id','order_id','return_no','refund_amount','refund_method','reason','note','created_at'])
       || jsonb_build_object('inventory_return_items', coalesce((select jsonb_agg(case when privileged then to_jsonb(i) else public.inventory_public_fields(to_jsonb(i), array['id','order_item_id','product_id','product_name','quantity','unit_price','item_condition']) end) from public.inventory_return_items i where i.return_id = r.id), '[]'::jsonb)) order by r.created_at desc), '[]') into result
-    from public.inventory_returns r where r.organization_id = org and (p_id is null or r.order_id = p_id)
-      and (team or r.user_id = auth.uid() or exists(select 1 from public.inventory_orders o where o.id = r.order_id and o.organization_id = org and (o.user_id = auth.uid() or o.salesperson_id = auth.uid())));
+    from public.inventory_returns r where r.organization_id = org and (p_id is null or r.order_id = p_id);
   elsif p_resource = 'movements' then
     select coalesce(jsonb_agg((case when privileged then to_jsonb(m) else
       public.inventory_public_fields(to_jsonb(m), array['id','product_id','order_id','operation_type','quantity','supplier','before_sellable_stock','after_sellable_stock','before_pending_stock','after_pending_stock','business_type','business_id','business_no','original_business_no','created_at'])
@@ -122,30 +121,6 @@ begin
     if v_id is null then raise exception 'Product not found'; end if;
   end if;
   return v_id;
-end $$;
-
--- PostgreSQL constraint DETAIL can contain a full cost-bearing row. Keep it
--- out of client errors from privileged write functions.
-do $$
-declare f record; body text;
-begin
-  for f in select p.oid, p.prosrc, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    join pg_language l on l.oid = p.prolang
-    where n.nspname = 'public' and l.lanname = 'plpgsql' and p.prosecdef
-      and p.proname = any(array['inventory_create_order','inventory_save_product','inventory_receive',
-        'inventory_create_sale','inventory_create_sale_return','inventory_create_walk_in_return',
-        'inventory_stock_out','inventory_confirm_order_fulfillment','inventory_adjust_stock',
-        'inventory_purchase_return','inventory_resolve_pending'])
-  loop
-    body := f.prosrc;
-    if f.proname = 'inventory_receive' and position('-- cost-entry-guard' in body) = 0 then
-      body := regexp_replace(body, '\mbegin\M', E'begin\n  -- cost-entry-guard\n  if not public.inventory_has_role(array[''super_admin'']) then raise exception ''Only super_admin can register purchase costs''; end if;', 'i');
-    end if;
-    if position('-- cost-error-guard' in body) = 0 then
-      body := regexp_replace(body, 'end[[:space:]]*;?[[:space:]]*$', E'exception when others then\n  -- cost-error-guard\n  raise exception using errcode = sqlstate, message = sqlerrm;\nend;\n', 'i');
-    end if;
-    execute replace(pg_get_functiondef(f.oid), f.prosrc, body);
-  end loop;
 end $$;
 
 notify pgrst, 'reload schema';

@@ -1,0 +1,344 @@
+#sales-print-root {
+  position: fixed;
+  inset: 0;
+  z-index: 10120;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(28, 39, 58, 0.28);
+}
+
+.sales-print-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.sales-print-chrome {
+  position: relative;
+  z-index: 1;
+}
+
+.sales-print-chrome {
+  width: min(920px, 100%);
+  max-height: calc(100dvh - 36px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.sales-template-list {
+  display: grid;
+  gap: 10px;
+}
+
+.sales-template-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 14px 16px;
+  text-align: left;
+  color: #24344a;
+  background: rgba(255, 255, 255, 0.46);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 16px;
+}
+
+.sales-template-option.active {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(82, 116, 165, 0.55);
+}
+
+.sales-template-option small {
+  color: #6d7c90;
+}
+
+.sales-print-toolbar,
+.sales-print-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+}
+
+.sales-print-options label {
+  display: grid;
+  gap: 4px;
+  color: #4d5d73;
+  font-size: 0.82rem;
+}
+
+.sales-print-options input,
+.sales-print-options select {
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.sales-print-options label.checkbox {
+  grid-auto-flow: column;
+  align-items: center;
+  min-height: 36px;
+}
+
+.sales-print-fit {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #d7dde6;
+  border-radius: 8px;
+  padding: 12px 0;
+}
+
+.sales-print-sizer {
+  overflow: hidden;
+  margin: 0 auto;
+}
+
+.sales-print-scale {
+  transform-origin: top left;
+}
+
+.sales-slip-page {
+  margin: 0 0 12px;
+  background: #fff;
+  color: #000;
+  box-sizing: border-box;
+  overflow: visible;
+  height: auto;
+}
+
+.sales-slip {
+  color: #000;
+  background: #fff;
+  font-family: "Songti SC", "SimSun", "Noto Serif SC", serif;
+  line-height: 1.25;
+}
+
+.sales-slip-head {
+  display: grid;
+  grid-template-columns: 18mm 1fr 28mm;
+  align-items: center;
+  margin-bottom: 1.5mm;
+}
+
+.sales-slip-logo {
+  width: 16mm;
+  height: 12mm;
+  object-fit: contain;
+  filter: grayscale(1);
+}
+
+.sales-slip-title {
+  text-align: center;
+}
+
+.sales-slip-title strong {
+  display: block;
+  font-size: 1.35em;
+  font-weight: 700;
+  letter-spacing: 0.35em;
+}
+
+.sales-slip-title b {
+  display: block;
+  margin-top: 0.4mm;
+  font-size: 1.7em;
+  font-weight: 700;
+  letter-spacing: 0.45em;
+}
+
+.sales-slip-page-no {
+  text-align: right;
+  font-size: 0.92em;
+}
+
+.sales-slip-meta,
+.sales-slip-customer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4mm 3mm;
+  margin: 0 0 1.2mm;
+  font-size: 0.95em;
+}
+
+.sales-slip-customer p,
+.sales-slip-meta p,
+.sales-slip-foot p {
+  margin: 0;
+}
+
+.sales-slip-wide {
+  grid-column: 1 / -1;
+}
+
+.sales-slip table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.sales-slip th,
+.sales-slip td {
+  border: 0.4pt solid #000;
+  padding: 0.6mm 0.8mm;
+  font-weight: 400;
+  text-align: center;
+  vertical-align: middle;
+  word-break: break-all;
+}
+
+.sales-slip th {
+  font-weight: 700;
+}
+
+.sales-slip td.name,
+.sales-slip th.name,
+.sales-slip td.note,
+.sales-slip th.note {
+  text-align: left;
+}
+
+.sales-slip-foot {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6mm 4mm;
+  margin-top: 1.4mm;
+  font-size: 0.95em;
+}
+
+.sales-slip-sign {
+  display: flex;
+  justify-content: space-between;
+  gap: 4mm;
+  margin-top: 2.4mm;
+}
+
+.sales-slip-sign span {
+  min-width: 28mm;
+}
+
+.sales-slip-sign b {
+  display: inline-block;
+  min-width: 24mm;
+  border-bottom: 0.4pt solid #000;
+  font-weight: 400;
+}
+
+.sales-slip-disclaimer {
+  margin: 1.4mm 0 0;
+  text-align: center;
+  font-size: 0.86em;
+}
+
+.print-settings-form {
+  display: grid;
+  gap: 14px;
+}
+
+.print-field-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.print-field-groups section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding-top: 8px;
+}
+
+.print-field-groups h3 {
+  width: 100%;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+@media print {
+  @page {
+    margin: 0;
+  }
+
+  html, body {
+    background: #fff !important;
+    background-image: none !important;
+  }
+
+  body > *:not(#sales-print-root) {
+    display: none !important;
+  }
+
+  #sales-print-root {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    padding: 0 !important;
+    background: #fff !important;
+    overflow: visible !important;
+  }
+
+  #sales-print-root .sales-print-chrome {
+    display: block !important;
+    width: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+
+  #sales-print-root .sales-print-ui,
+  #sales-print-root .sales-print-backdrop,
+  #sales-print-root .sales-template-list {
+    display: none !important;
+  }
+
+  #sales-print-root .sales-print-fit,
+  #sales-print-root .sales-print-sizer {
+    overflow: visible !important;
+    background: #fff !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+    height: auto !important;
+  }
+
+  #sales-print-root .sales-print-scale {
+    transform: none !important;
+    width: auto !important;
+    height: auto !important;
+  }
+
+  .sales-slip-page {
+    margin: 0 !important;
+    box-shadow: none !important;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .sales-slip-page.is-last-sheet {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  .sales-slip,
+  .sales-slip * {
+    color: #000 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+}

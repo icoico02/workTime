@@ -1,11 +1,14 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import InventoryProfit from '../components/InventoryProfit.vue'
 import { defaultProfitSettings, evaluateProfit } from '../inventoryProfit'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import InventoryNavigation from '../components/InventoryNavigation.vue'
 import FunctionHeader from '../components/FunctionHeader.vue'
 import GlassModal from '../components/GlassModal.vue'
 import InventorySearchSelect from '../components/InventorySearchSelect.vue'
+import SalesPrintDialog from '../components/SalesPrintDialog.vue'
+import { defaultPrintSettings, normalizePrintSettings, PRINT_FIELD_GROUPS, toPrintOrder } from '../inventoryPrint'
 import { supabase } from '../supabase'
 
 const route = useRoute()
@@ -35,7 +38,14 @@ const cart = ref([])
 const payment = ref('cash')
 const discount = ref(0)
 const saleNote = ref('')
-const orderCustomer = ref({ name: '', contact_name: '', phone: '', address: '' })
+const orderCustomer = ref({ id: '', name: '', contact_name: '', phone: '', address: '' })
+const customerPick = ref('')
+const customers = ref([])
+const pendingToast = ref('')
+let pendingToastTimer = 0
+let knownPendingIds = new Set()
+let ordersChannel = null
+let suppressPendingToast = true
 const orderFreight = ref(0)
 const orderReceived = ref(0)
 const orderShipping = ref('pickup')
@@ -49,6 +59,10 @@ const profitDraft = ref(defaultProfitSettings())
 const lowProfit = (revenue, cost, quantity) => evaluateProfit(revenue, cost, quantity, profitSettings.value)?.low || false
 const savingProfitSettings = ref(false)
 const profitSettingsError = ref('')
+const printSettings = ref(defaultPrintSettings())
+const printDraft = ref(defaultPrintSettings())
+const savingPrintSettings = ref(false)
+const printJob = ref(null)
 const readInventory = (resource, id = null) => supabase.rpc('inventory_read', { p_resource: resource, p_id: id })
 async function refreshProfitSettings() {
   if (!isSuperAdmin.value) return
@@ -56,6 +70,36 @@ async function refreshProfitSettings() {
   if (error) { profitSettingsError.value = error.message; return }
   profitSettings.value = data
   profitSettingsError.value = ''
+}
+async function refreshPrintSettings() {
+  const { data, error } = await supabase.rpc('inventory_print_settings')
+  if (error || !data) return
+  printSettings.value = normalizePrintSettings({ ...data, company_name: data.company_name || organization.value?.name || '' })
+}
+async function openPrintSettings() {
+  printDraft.value = normalizePrintSettings({ ...printSettings.value, company_name: printSettings.value.company_name || organization.value?.name || '' })
+  openSection('print')
+}
+async function savePrintSettings() {
+  if (!isSuperAdmin.value) return message('只有超级管理员可以修改打印设置。')
+  savingPrintSettings.value = true
+  const payload = normalizePrintSettings(printDraft.value)
+  const { error } = await supabase.rpc('inventory_print_settings', { p_settings: payload })
+  savingPrintSettings.value = false
+  if (error) return message(`打印设置保存失败：${error.message}`)
+  printSettings.value = payload
+  message('打印设置已保存。')
+}
+async function openPrint(order, items) {
+  let source = order
+  let lines = items
+  if (order?.id) {
+    const { data, error } = await supabase.rpc('inventory_print_order', { p_order_id: order.id })
+    if (!error && data?.order_no) { source = data; lines = data.inventory_order_items || lines }
+  }
+  const printable = toPrintOrder(source, lines)
+  if (!printable) return message('这张单据没有可打印的销售单。')
+  printJob.value = printable
 }
 async function openProfitControls() {
   await refreshProfitSettings()
@@ -77,12 +121,51 @@ const productDetail = ref({ open: false, product: null, suppliers: [], batches: 
 
 const sections = [['dashboard', '总览'], ['checkout', '开单'], ['pending', '待确认'], ['orders', '订单'], ['products', '商品'], ['inbound', '入库'], ['outbound', '出库'], ['returns', '退货'], ['stock', '库存'], ['logs', '流水'], ['documents', '单据']]
 const currentSection = computed(() => route.params.section || 'dashboard')
-const sectionTitle = computed(() => ({ controls: '经营控制', dashboard: '进销存总览', checkout: '快速开单', pending: '待确认出库', orders: '销售订单', products: '商品管理', inbound: '入库登记', outbound: '出库登记', returns: '销售退货', stock: '库存状态', logs: '经营流水', documents: '业务单据' }[currentSection.value] || '进销存总览'))
+const sectionTitle = computed(() => ({ controls: '经营控制', print: '打印设置', dashboard: '进销存总览', checkout: '快速开单', pending: '待确认出库', orders: '销售订单', products: '商品管理', inbound: '入库登记', outbound: '出库登记', returns: '销售退货', stock: '库存状态', logs: '经营流水', documents: '业务单据' }[currentSection.value] || '进销存总览'))
 const categories = computed(() => [...new Set(products.value.map((p) => p.category).filter(Boolean))])
 const productOptions = computed(() => products.value.map((product) => ({ id: product.id, label: product.name, description: `${product.sku}${product.specification ? ` · ${product.specification}` : ''} · 可售 ${product.stock} 件` })))
 const supplierOptions = computed(() => [...new Set(movements.value.filter((item) => item.operation_type === 'inbound' && item.supplier).map((item) => item.supplier.trim()).filter(Boolean))].map((supplier) => ({ id: supplier, label: supplier, description: '历史入库供应商' })))
+const customerOptions = computed(() => {
+  const records = new Map()
+  const keyOf = (name, address) => `${String(name || '').trim().toLowerCase()}|${String(address || '').trim().toLowerCase()}`
+  for (const customer of customers.value) {
+    const name = String(customer.name || '').trim()
+    if (!name) continue
+    const key = keyOf(name, customer.address)
+    if (records.has(key)) continue
+    records.set(key, {
+      id: customer.id || '',
+      name,
+      contact_name: customer.contact_name || '',
+      phone: customer.phone || '',
+      address: customer.address || '',
+      source: 'customer',
+    })
+  }
+  for (const order of orders.value) {
+    const name = String(order.customer_name || '').trim()
+    if (!name) continue
+    const key = keyOf(name, order.shipping_address)
+    if (records.has(key)) continue
+    records.set(key, {
+      id: order.customer_id || '',
+      name,
+      contact_name: order.contact_name || '',
+      phone: order.contact_phone || '',
+      address: order.shipping_address || '',
+      source: 'order',
+    })
+  }
+  return [...records.values()].map((customer) => ({
+    id: customer.id || `${customer.name}|${customer.address}`,
+    label: customer.name,
+    description: [customer.contact_name, customer.phone, customer.address].filter(Boolean).join(' · ') || (customer.source === 'customer' ? '客户资料' : '历史订单客户'),
+    customer,
+  }))
+})
 const orderListRows = computed(() => orders.value.map((order) => ({ ...order, items: order.inventory_order_items || [] })))
 const pendingOrders = computed(() => orderListRows.value.filter((order) => order.fulfillment_status === 'not_fulfilled' && !['completed', 'cancelled'].includes(order.order_status)))
+const pendingCount = computed(() => pendingOrders.value.length)
 const completedOrderRows = computed(() => orderListRows.value.filter((order) => !pendingOrders.value.some((pending) => pending.id === order.id)))
 const visibleProducts = computed(() => products.value.filter((p) => (!category.value || p.category === category.value) && `${p.name} ${p.sku}`.toLowerCase().includes(search.value.toLowerCase())))
 const warnings = computed(() => products.value.filter((p) => Number(p.stock) <= Number(p.low_stock_threshold)))
@@ -100,6 +183,17 @@ const orderStatusText = (value) => ({ pending_confirmation: '待确认', pending
 const paymentStatusText = (value) => ({ unpaid: '待付款', partially_paid: '部分付款', paid: '已付款', partially_refunded: '部分退款', refunded: '已退款' })[value] || value || '待付款'
 const fulfillmentStatusText = (value) => ({ not_fulfilled: '待出库', fulfilled: '已出库' })[value] || value || '待出库'
 const shippingText = (value) => ({ pickup: '自提', local_delivery: '本地配送', express: '快递', logistics: '物流', other: '其他' })[value] || value || '自提'
+const documentStatusText = (record, movement) => {
+  if (record?.return_no) return '已完成'
+  if (record?.order_status) return orderStatusText(record.order_status)
+  if (movement?.operation_type === 'inbound') return '已入库'
+  if (movement?.operation_type === 'purchase_return') return '已退回供应商'
+  return '已完成'
+}
+const refundMethodText = (value) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', bank_card: '银行卡', other: '其他' })[value] || value || '未填写'
+const originalDocumentItem = (item) => flowDetail.value.record?.original_order?.inventory_order_items?.find((original) => original.id === item.order_item_id)
+const documentItemSku = (item) => [item.specification || originalDocumentItem(item)?.specification, item.sku || originalDocumentItem(item)?.sku].filter(Boolean).join(' · ') || '—'
+const documentItemSupplier = (item) => item.inventory_suppliers?.name || originalDocumentItem(item)?.inventory_suppliers?.name || flowDetail.value.movement?.supplier || '未指定'
 function returnedQuantity(itemId) {
   return orderDetail.value.returns.flatMap((record) => record.inventory_return_items || []).filter((item) => item.order_item_id === itemId).reduce((sum, item) => sum + Number(item.quantity || 0), 0)
 }
@@ -122,6 +216,7 @@ function closeInventoryDialog() {
   walkInReturn.value.open = false
   pendingAction.value.open = false
   productDetail.value.open = false
+  printJob.value = null
 }
 function editProduct(product) { editor.value = product ? { ...product } : blankProduct(); showEditor.value = true }
 function selectInbound() { if (selectedInbound.value && !inbound.value.price) inbound.value.price = selectedInbound.value.cost_price }
@@ -142,7 +237,12 @@ async function loadData() {
   const failure = productRes.error || movementRes.error || orderRes.error || returnRes.error
   if (failure) errorMessage.value = `读取失败：${failure.message}。请确认已执行 inventory_profit_controls.sql。`
   else { products.value = productRes.data || []; movements.value = movementRes.data || []; orders.value = orderRes.data || []; returns.value = returnRes.data || []; isSuperAdmin.value = Boolean(roleRes.data) }
+  const customerRes = await supabase.from('inventory_customers').select('id,name,contact_name,phone,address').order('updated_at', { ascending: false })
+  if (!customerRes.error) customers.value = customerRes.data || []
+  rememberPendingIds()
+  suppressPendingToast = false
   await refreshProfitSettings()
+  await refreshPrintSettings()
   loading.value = false
 }
 
@@ -163,6 +263,7 @@ async function createOrganization() {
   if (error) return message(`创建店铺失败：${error.message}`)
   await loadOrganization()
   await loadData()
+  bindOrdersRealtime()
 }
 
 async function saveProduct() {
@@ -199,6 +300,66 @@ async function submitOutbound() {
   if (error) return message(error.message.includes('Insufficient') ? '库存不足，不能出库。' : `出库失败：${error.message}`)
   outbound.value = { product: '', quantity: 1, type: 'normal_outbound', note: '' }
   await loadData(); message('出库成功，库存与流水已同步更新。')
+}
+function blankCustomer() { return { id: '', name: '', contact_name: '', phone: '', address: '' } }
+function selectCustomer(value) {
+  const pick = String(value || '').trim()
+  customerPick.value = pick
+  if (!pick) {
+    orderCustomer.value = blankCustomer()
+    return
+  }
+  const match = customerOptions.value.find((item) => item.id === pick || item.label === pick)
+  if (match?.customer) {
+    orderCustomer.value = {
+      id: match.customer.id || '',
+      name: match.customer.name,
+      contact_name: match.customer.contact_name || '',
+      phone: match.customer.phone || '',
+      address: match.customer.address || '',
+    }
+    return
+  }
+  orderCustomer.value = { ...orderCustomer.value, id: '', name: pick }
+}
+watch(customerPick, (value) => {
+  const pick = String(value || '').trim()
+  if (!pick) return
+  if (customerOptions.value.some((item) => item.id === pick)) return
+  if (orderCustomer.value.id || orderCustomer.value.name === pick) return
+  orderCustomer.value = { ...orderCustomer.value, id: '', name: pick }
+})
+function showPendingToast(orderNo) {
+  if (!orderNo) return
+  pendingToast.value = `收到新的待确认订单：#${orderNo}`
+  window.clearTimeout(pendingToastTimer)
+  pendingToastTimer = window.setTimeout(() => { pendingToast.value = '' }, 4200)
+}
+function rememberPendingIds(list = pendingOrders.value) {
+  knownPendingIds = new Set(list.map((order) => order.id).filter(Boolean))
+}
+function noticeNewPendingOrders(previousIds = knownPendingIds) {
+  const next = pendingOrders.value
+  const fresh = next.filter((order) => order.id && !previousIds.has(order.id))
+  rememberPendingIds(next)
+  if (suppressPendingToast || !fresh.length) return
+  const newest = [...fresh].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0]
+  showPendingToast(newest.order_no)
+}
+async function refreshOrdersQuietly() {
+  if (!supabase || !organization.value) return
+  const previousIds = new Set(knownPendingIds)
+  const orderRes = await readInventory('orders')
+  if (orderRes.error) return
+  orders.value = orderRes.data || []
+  noticeNewPendingOrders(previousIds)
+}
+function bindOrdersRealtime() {
+  if (!supabase || !organization.value?.id) return
+  if (ordersChannel) supabase.removeChannel(ordersChannel)
+  ordersChannel = supabase.channel(`inventory-orders:${organization.value.id}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_orders', filter: `organization_id=eq.${organization.value.id}` }, () => { refreshOrdersQuietly() })
+    .subscribe()
 }
 function addCart(product) {
   if (!product.stock) return message('库存不足，不能加入订单。')
@@ -239,7 +400,13 @@ async function completeSale() {
     if (Number(orderReceived.value || 0) > cartTotal.value) return message('已收金额不能大于应收金额。')
     const { data: orderId, error } = await supabase.rpc('inventory_create_order', {
       p_items: cart.value.map((p) => ({ product_id: p.id, quantity: p.quantity, unit_price: Number(p.unit_price), discount_amount: 0 })),
-      p_customer: orderCustomer.value,
+      p_customer: {
+        id: orderCustomer.value.id || null,
+        name: orderCustomer.value.name,
+        contact_name: orderCustomer.value.contact_name,
+        phone: orderCustomer.value.phone,
+        address: orderCustomer.value.address,
+      },
       p_payment_method: payment.value,
       p_initial_received: Number(orderReceived.value || 0),
       p_discount: Number(discount.value || 0),
@@ -258,8 +425,11 @@ async function completeSale() {
       const { error: sourcesError } = await supabase.rpc('inventory_assign_order_sources', { p_order_id: orderId, p_sources: selectedSources.map((item) => ({ order_item_id: orderItems.find((row) => row.product_id === item.id)?.id, supplier_id: item.source_supplier_id })) })
       if (sourcesError) return message(`订单已创建，但来源保存失败：${sourcesError.message}`)
     }
-    cart.value = []; payment.value = 'cash'; discount.value = 0; saleNote.value = ''; orderFreight.value = 0; orderReceived.value = 0; orderShipping.value = 'pickup'; orderCustomer.value = { name: '', contact_name: '', phone: '', address: '' }
-    await loadData(); openSection('pending'); message('订单已保存，请在待确认页面确认出库。')
+    cart.value = []; payment.value = 'cash'; discount.value = 0; saleNote.value = ''; orderFreight.value = 0; orderReceived.value = 0; orderShipping.value = 'pickup'; orderCustomer.value = blankCustomer(); customerPick.value = ''
+    suppressPendingToast = true
+    await loadData()
+    suppressPendingToast = false
+    openSection('pending'); message('订单已保存，请在待确认页面确认出库。')
   } catch (error) {
     message('开单失败：' + (error.message || '请检查网络后重试'))
   } finally {
@@ -292,6 +462,11 @@ async function fulfillOrder(order) {
 }
 function beginOrderReturn() {
   const { order, items, returns: existing } = orderDetail.value
+  if (!order) return message('无法退货：订单信息未加载，请重新打开订单。')
+  if (order.order_status === 'cancelled') return message('无法退货：该订单已取消。')
+  if (order.return_status === 'full') return message('无法退货：该订单商品已全部退货。')
+  if (order.order_status !== 'completed') return message('无法退货：当前订单状态为“' + orderStatusText(order.order_status) + '”，订单完成后才能退货。')
+  if (!items.length) return message('无法退货：订单没有商品明细，请刷新后重试。')
   const returned = new Map()
   existing.flatMap((record) => record.inventory_return_items || []).forEach((item) => returned.set(item.order_item_id, (returned.get(item.order_item_id) || 0) + Number(item.quantity)))
   const draftItems = items.map((item) => ({ ...item, max: Number(item.quantity) - (returned.get(item.id) || 0), quantity: 0, condition: 'resellable' })).filter((item) => item.max > 0)
@@ -358,9 +533,11 @@ async function openFlow(movement) {
       result = response.data?.find((row) => row.id === (movement.business_id || movement.order_id) || row.order_no === movement.business_no)
       items = result?.inventory_order_items || []
     } else if (movement.business_type === 'sale_return') {
-      const response = await readInventory('returns', movement.order_id)
+      const [response, orderResponse] = await Promise.all([readInventory('returns', movement.order_id), readInventory('orders', movement.order_id)])
       if (response.error) throw response.error
+      if (orderResponse.error) throw orderResponse.error
       result = response.data?.find((row) => row.id === movement.business_id || row.return_no === movement.business_no)
+      if (result) result = { ...result, original_order: orderResponse.data?.[0] || null }
       items = result?.inventory_return_items || []
     }
   } catch (error) {
@@ -371,6 +548,11 @@ async function openFlow(movement) {
 }
 async function copyBusinessNo(value) {
   try { await navigator.clipboard.writeText(value); message('业务单号已复制。') } catch { message('当前浏览器不支持复制，请手动复制单号。') }
+}
+function openRelatedOrder(order) {
+  if (!order) return
+  flowDetail.value.open = false
+  openOrder(order)
 }
 async function submitPending() {
   const draft = pendingAction.value
@@ -412,7 +594,10 @@ const ranking = computed(() => {
 let profitSettingsTimer
 onMounted(async () => {
   await loadOrganization()
-  if (organization.value) await loadData()
+  if (organization.value) {
+    await loadData()
+    bindOrdersRealtime()
+  }
   else loading.value = false
   profitDraft.value = { ...profitSettings.value }
   profitSettingsTimer = window.setInterval(refreshProfitSettings, 30000)
@@ -420,22 +605,25 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   window.clearInterval(profitSettingsTimer)
+  window.clearTimeout(pendingToastTimer)
   window.removeEventListener('focus', refreshProfitSettings)
+  if (ordersChannel) supabase?.removeChannel(ordersChannel)
 })
 </script>
 
 <template>
   <div class="app-shell inventory-shell inventory-app">
     <FunctionHeader :title="sectionTitle" @back="goHome" @sign-out="signOut" />
-    <nav class="inventory-nav"><RouterLink v-for="[key, label] in sections" :key="key" :to="`/inventory/${key}`">{{ label }}</RouterLink></nav>
+    <InventoryNavigation :sections="sections" :badges="{ pending: pendingCount }" />
     <main class="inventory-content">
       <section v-if="!organization && !loading" class="inventory-glass-card movement-card"><div class="inventory-card-title"><div><p class="eyebrow">INVENTORY WORKSPACE</p><h2>创建店铺 / 组织</h2></div></div><p>进销存数据会在这个店铺内协同，计时、签到和其他功能不受影响。</p><form class="inventory-form" @submit.prevent="createOrganization"><label><span>店铺或组织名称</span><input v-model="organizationName" placeholder="例如：小王杂货铺" required /></label><button class="glass-primary-btn" :disabled="organizationLoading">{{ organizationLoading ? '创建中…' : '创建并进入进销存' }}</button></form></section>
       <section v-else-if="errorMessage" class="inventory-glass-card inventory-error"><strong>无法载入进销存</strong><p>{{ errorMessage }}</p><button class="glass-primary-btn" @click="loadData">重新读取</button></section>
       <section v-else-if="loading && !products.length" class="inventory-glass-card empty-state">正在读取真实库存数据…</section>
 
       <template v-else-if="currentSection === 'dashboard'">
-        <div class="inventory-section-heading"><div><p class="eyebrow">BUSINESS TODAY</p><h2>今天的经营情况</h2></div><div class="inventory-form-actions"><button v-if="isSuperAdmin" class="glass-action-btn" @click="openProfitControls">经营控制</button><button class="glass-primary-btn" @click="openSection('checkout')">开始开单</button></div></div>
+        <div class="inventory-section-heading"><div><p class="eyebrow">BUSINESS TODAY</p><h2>今天的经营情况</h2></div><div class="inventory-form-actions"><button v-if="isSuperAdmin" class="glass-action-btn" @click="openProfitControls">经营控制</button><button v-if="isSuperAdmin" class="glass-action-btn" @click="openPrintSettings">打印设置</button><button class="glass-primary-btn" @click="openSection('checkout')">开始开单</button></div></div>
         <div class="inventory-metrics business-metrics">
+          <button v-if="pendingCount" class="inventory-metric metric-pending" @click="openSection('pending')"><span>待确认订单</span><strong>{{ pendingCount }}</strong><small>点击查看并确认出库</small></button>
           <button class="inventory-metric metric-blue" @click="openSection('checkout')"><span>今日销售额</span><strong>{{ money(business.sales) }}</strong><small>销售完成后自动更新</small></button>
           <button v-if="isSuperAdmin" class="inventory-metric metric-purple" @click="openSection('logs')"><span>今日毛利</span><strong :class="{ 'profit-number-low': lowProfit(business.netSales, business.netSales - business.profit, business.quantity) }">{{ money(business.profit) }}</strong><small v-if="lowProfit(business.netSales, business.netSales - business.profit, business.quantity)" class="profit-warning-label">低毛利</small><small>已扣除商品成本</small></button>
           <button class="inventory-metric metric-green" @click="openSection('logs')"><span>今日订单</span><strong>{{ business.orders }}</strong><small>笔销售订单</small></button>
@@ -464,21 +652,46 @@ onUnmounted(() => {
         </section>
         <p v-else class="empty-state">无权访问经营控制。</p>
       </template>
+      <template v-else-if="currentSection === 'print'">
+        <section v-if="isSuperAdmin" class="inventory-glass-card">
+          <h2>打印设置</h2>
+          <form class="inventory-form print-settings-form" @submit.prevent="savePrintSettings">
+            <label><span>公司名称</span><input v-model="printDraft.company_name" maxlength="80" /></label>
+            <label><span>公司地址</span><input v-model="printDraft.company_address" maxlength="160" /></label>
+            <label><span>联系电话</span><input v-model="printDraft.company_phone" maxlength="40" /></label>
+            <label><span>LOGO 图片地址</span><input v-model="printDraft.logo_url" type="url" placeholder="https://" /></label>
+            <label><span>默认纸张</span><select v-model="printDraft.default_paper"><option value="continuous-2">二等分 241×140</option><option value="continuous-3">三等分 241×93</option><option value="continuous-1">一等分 241×280</option><option value="a4">A4</option></select></label>
+            <label><span>默认模板</span><select v-model="printDraft.default_template"><option value="standard">销售单</option><option value="compact">简洁销售单</option><option value="a4">A4销售单</option></select></label>
+            <label><span>页边距（毫米）</span><input v-model.number="printDraft.margin_mm" type="number" min="0" max="20" step="1" /></label>
+            <label><span>字体大小（pt）</span><input v-model.number="printDraft.font_size_pt" type="number" min="7" max="14" step="0.5" /></label>
+            <label><span>每页最大商品行数</span><input v-model.number="printDraft.rows_per_page" type="number" min="1" max="40" step="1" /></label>
+            <label><span>底部声明</span><input v-model="printDraft.footer_note" maxlength="200" /></label>
+            <div class="print-field-groups">
+              <section v-for="[title, fields] in PRINT_FIELD_GROUPS" :key="title">
+                <h3>{{ title }}</h3>
+                <label v-for="[key, label] in fields" :key="key" class="checkbox"><input v-model="printDraft.fields[key]" type="checkbox" />{{ label }}</label>
+              </section>
+            </div>
+            <button class="glass-primary-btn" :disabled="savingPrintSettings">{{ savingPrintSettings ? '保存中…' : '保存打印设置' }}</button>
+          </form>
+        </section>
+        <p v-else class="empty-state">无权访问打印设置。</p>
+      </template>
       <template v-else-if="currentSection === 'checkout'">
         <div class="inventory-section-heading"><div><p class="eyebrow">QUICK SALE</p><h2>点商品，直接开单</h2></div><button class="glass-action-btn" @click="openSection('products')">管理商品</button></div>
         <section class="checkout-layout"><div class="inventory-glass-card"><div class="product-toolbar"><input v-model="search" placeholder="搜索商品或货号" /><select v-model="category"><option value="">全部分类</option><option v-for="item in categories" :key="item">{{ item }}</option></select></div><div class="checkout-product-grid"><button v-for="product in visibleProducts" :key="product.id" class="checkout-product" :disabled="!product.stock" @click="addCart(product)"><img v-if="product.image_url" :src="product.image_url" :alt="product.name" /><span v-else class="product-image-placeholder">{{ product.name.slice(0,1) }}</span><b>{{ product.name }}</b><small>{{ product.stock }} 件可售</small><strong>{{ money(product.sale_price) }}</strong></button><p v-if="!visibleProducts.length" class="empty-state">没有匹配的商品</p></div></div>
-          <aside class="inventory-glass-card order-panel"><div class="inventory-card-title"><h3>当前订单</h3><span>{{ cart.length }} 种商品</span></div><p v-if="!cart.length" class="empty-state">点击商品加入订单</p><div class="cart-list"><article v-for="item in cart" :key="item.id"><div><strong>{{ item.name }}</strong><input v-model.number="item.unit_price" type="number" min="0" step="0.01" /></div><InventorySearchSelect v-model="item.source_supplier_id" :options="(productSources[item.id] || []).map((source) => ({ id: source.supplier_id, label: source.supplier_name, description: `可用 ${source.available_quantity} 件` }))" placeholder="自动分配库存来源" /><div class="quantity-stepper"><button @click="changeQuantity(item,-1)">−</button><b>{{ item.quantity }}</b><button @click="changeQuantity(item,1)">＋</button><span>{{ money(item.quantity * item.unit_price) }}</span></div><InventoryProfit v-if="isSuperAdmin" :revenue="item.quantity * item.unit_price" :cost="item.quantity * item.cost_price" :quantity="item.quantity" :settings="profitSettings" :estimated="true" /></article></div><label>客户名称<input v-model="orderCustomer.name" placeholder="临时客户可直接填写" /></label><label>联系人 / 手机<input v-model="orderCustomer.contact_name" placeholder="联系人" /><input v-model="orderCustomer.phone" placeholder="手机号" /></label><label>收货地址<input v-model="orderCustomer.address" placeholder="自提可留空" /></label><label>配送方式<select v-model="orderShipping"><option value="pickup">自提</option><option value="local_delivery">本地配送</option><option value="express">快递</option><option value="logistics">物流</option><option value="other">其他</option></select></label><label>收款方式<select v-model="payment"><option value="cash">现金</option><option value="bank_transfer">转账</option><option value="wechat">微信</option><option value="alipay">支付宝</option><option value="bank_card">银行卡</option><option value="other">其他</option></select></label><label>整单优惠<input v-model.number="discount" type="number" min="0" step="0.01" /></label><label>运费<input v-model.number="orderFreight" type="number" min="0" step="0.01" /></label><label>已收金额<input v-model.number="orderReceived" type="number" min="0" step="0.01" /></label><label>客户备注<input v-model="saleNote" placeholder="选填" /></label><InventoryProfit v-if="isSuperAdmin" :revenue="cartTotal" :cost="cartCost" :quantity="cart.reduce((sum, item) => sum + Number(item.quantity), 0)" :settings="profitSettings" :estimated="true" /><div class="order-total"><span>应收合计</span><strong>{{ money(cartTotal) }}</strong><small>未收 {{ money(cartTotal - Number(orderReceived || 0)) }}</small></div><button class="glass-primary-btn checkout-submit" :disabled="submitting || !cart.length" @click="completeSale">{{ submitting ? '正在保存…' : '保存待确认订单' }}</button></aside>
+          <aside class="inventory-glass-card order-panel"><div class="inventory-card-title"><h3>当前订单</h3><span>{{ cart.length }} 种商品</span></div><p v-if="!cart.length" class="empty-state">点击商品加入订单</p><div class="cart-list"><article v-for="item in cart" :key="item.id"><div><strong>{{ item.name }}</strong><input v-model.number="item.unit_price" type="number" min="0" step="0.01" /></div><InventorySearchSelect v-model="item.source_supplier_id" :options="(productSources[item.id] || []).map((source) => ({ id: source.supplier_id, label: source.supplier_name, description: `可用 ${source.available_quantity} 件` }))" placeholder="自动分配库存来源" /><div class="quantity-stepper"><button @click="changeQuantity(item,-1)">−</button><b>{{ item.quantity }}</b><button @click="changeQuantity(item,1)">＋</button><span>{{ money(item.quantity * item.unit_price) }}</span></div><InventoryProfit v-if="isSuperAdmin" :revenue="item.quantity * item.unit_price" :cost="item.quantity * item.cost_price" :quantity="item.quantity" :settings="profitSettings" :estimated="true" /></article></div><label>客户名称<InventorySearchSelect v-model="customerPick" :options="customerOptions" :allow-custom="true" empty-text="没有匹配的客户" placeholder="输入客户名称搜索，也可直接填写" @change="selectCustomer" /></label><label>联系人 / 手机<input v-model="orderCustomer.contact_name" placeholder="联系人" /><input v-model="orderCustomer.phone" placeholder="手机号" /></label><label>收货地址<input v-model="orderCustomer.address" placeholder="自提可留空" /></label><label>配送方式<select v-model="orderShipping"><option value="pickup">自提</option><option value="local_delivery">本地配送</option><option value="express">快递</option><option value="logistics">物流</option><option value="other">其他</option></select></label><label>收款方式<select v-model="payment"><option value="cash">现金</option><option value="bank_transfer">转账</option><option value="wechat">微信</option><option value="alipay">支付宝</option><option value="bank_card">银行卡</option><option value="other">其他</option></select></label><label>整单优惠<input v-model.number="discount" type="number" min="0" step="0.01" /></label><label>运费<input v-model.number="orderFreight" type="number" min="0" step="0.01" /></label><label>已收金额<input v-model.number="orderReceived" type="number" min="0" step="0.01" /></label><label>客户备注<input v-model="saleNote" placeholder="选填" /></label><InventoryProfit v-if="isSuperAdmin" :revenue="cartTotal" :cost="cartCost" :quantity="cart.reduce((sum, item) => sum + Number(item.quantity), 0)" :settings="profitSettings" :estimated="true" /><div class="order-total"><span>应收合计</span><strong>{{ money(cartTotal) }}</strong><small>未收 {{ money(cartTotal - Number(orderReceived || 0)) }}</small></div><button class="glass-primary-btn checkout-submit" :disabled="submitting || !cart.length" @click="completeSale">{{ submitting ? '正在保存…' : '保存待确认订单' }}</button></aside>
         </section>
       </template>
 
       <template v-else-if="currentSection === 'pending'">
         <div class="inventory-section-heading"><div><p class="eyebrow">PENDING FULFILLMENT</p><h2>待确认出库</h2><p>仅显示尚未影响库存的销售订单。</p></div><strong class="status-pill status-warning">{{ pendingOrders.length }} 单待处理</strong></div>
-        <section class="inventory-glass-card"><div class="product-toolbar"><input v-model="search" placeholder="搜索订单号、客户、商品" /></div><div class="order-list order-list-rich"><article v-for="order in pendingOrders.filter((item) => `${item.order_no} ${item.customer_name || ''} ${item.contact_name || ''} ${item.items.map((line) => line.product_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))" :key="order.id"><div><strong>{{ order.order_no }}</strong><small>{{ order.customer_name || '临时客户' }}{{ order.contact_name ? ` · ${order.contact_name}` : '' }} · {{ dateText(order.created_at) }}</small><small>{{ order.items.map((line) => `${line.product_name} × ${line.quantity}`).join('；') || '暂无商品明细' }}</small><small>{{ order.shipping_method }} · {{ order.payment_status }}</small></div><div class="order-list-amount"><b>{{ money(order.total_amount) }}</b><small>待出库</small></div><button class="mini-btn edit-btn" @click="openOrder(order)">确认出库</button></article><p v-if="!pendingOrders.length" class="empty-state">暂无待确认出库订单。</p></div></section>
+        <section class="inventory-glass-card"><div class="product-toolbar"><input v-model="search" placeholder="搜索订单号、客户、商品" /></div><div class="order-list order-list-rich"><article v-for="order in pendingOrders.filter((item) => `${item.order_no} ${item.customer_name || ''} ${item.contact_name || ''} ${item.items.map((line) => line.product_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))" :key="order.id" class="order-row-open order-row-pending" @click="openOrder(order)"><div><strong>{{ order.order_no }}</strong><small>{{ order.customer_name || '临时客户' }}{{ order.contact_name ? ` · ${order.contact_name}` : '' }} · {{ dateText(order.created_at) }}</small><small>{{ order.items.map((line) => `${line.product_name} × ${line.quantity}`).join('；') || '暂无商品明细' }}</small><small>{{ order.shipping_method }} · {{ order.payment_status }}</small></div><div class="order-list-amount"><b>{{ money(order.total_amount) }}</b><small class="pending-flag">待确认</small></div><button class="mini-btn edit-btn" @click.stop="openOrder(order)">确认出库</button></article><p v-if="!pendingOrders.length" class="empty-state">暂无待确认出库订单。</p></div></section>
       </template>
 
       <template v-else-if="currentSection === 'orders'">
-        <div class="inventory-section-heading"><div><p class="eyebrow">SALES ORDERS</p><h2>订单列表</h2></div><button class="glass-primary-btn" @click="openSection('checkout')">新建订单</button></div>
-        <section class="inventory-glass-card"><div class="product-toolbar"><input v-model="search" placeholder="搜索订单号、客户、联系人、手机号" /></div><div class="order-list order-list-rich"><article v-for="order in completedOrderRows.filter((item) => `${item.order_no} ${item.customer_name || ''} ${item.contact_name || ''} ${item.contact_phone || ''} ${item.items.map((line) => line.product_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))" :key="order.id"><div><strong>{{ order.order_no }}</strong><small>{{ order.customer_name || '临时客户' }}{{ order.contact_name ? ` · ${order.contact_name}` : '' }} · {{ dateText(order.created_at) }}</small><small>{{ order.items.map((line) => `${line.product_name} × ${line.quantity} · 售 ${money(line.unit_price)}${line.inventory_suppliers?.name ? ` · ${line.inventory_suppliers.name}` : ''}${isSuperAdmin ? ` · 成本 ${money(line.actual_cost ?? 0)}` : ''}`).join('；') || '暂无商品明细' }}</small><small>{{ order.order_status }} · {{ order.fulfillment_status }} · {{ order.payment_status }}</small></div><div class="order-list-amount"><b>{{ money(order.total_amount) }}</b><small v-if="isSuperAdmin">成本 {{ money(order.total_cost) }}</small><InventoryProfit v-if="isSuperAdmin" :revenue="order.total_amount" :cost="order.total_cost" :quantity="order.items.reduce((sum, item) => sum + Number(item.quantity), 0)" :settings="profitSettings" :estimated="order.fulfillment_status !== 'fulfilled'" /></div><button class="mini-btn edit-btn" @click="openOrder(order)">查看详情</button></article><p v-if="!completedOrderRows.length" class="empty-state">暂无已处理订单。</p></div></section>
+        <div class="inventory-section-heading"><div><p class="eyebrow">SALES ORDERS</p><h2>销售订单列表</h2></div><button class="glass-primary-btn" @click="openSection('checkout')">新建订单</button></div>
+        <section class="inventory-glass-card"><div class="product-toolbar"><input v-model="search" placeholder="搜索订单号、客户、联系人、手机号" /></div><div class="order-list order-list-rich"><article v-for="order in completedOrderRows.filter((item) => `${item.order_no} ${item.customer_name || ''} ${item.contact_name || ''} ${item.contact_phone || ''} ${item.items.map((line) => line.product_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))" :key="order.id" class="order-row-open" @click="openOrder(order)"><div><strong>{{ order.order_no }}</strong><small>{{ order.customer_name || '临时客户' }}{{ order.contact_name ? ` · ${order.contact_name}` : '' }} · {{ dateText(order.created_at) }}</small><small>{{ order.items.map((line) => `${line.product_name} × ${line.quantity} · 售 ${money(line.unit_price)}${line.inventory_suppliers?.name ? ` · ${line.inventory_suppliers.name}` : ''}${isSuperAdmin ? ` · 成本 ${money(line.actual_cost ?? 0)}` : ''}`).join('；') || '暂无商品明细' }}</small><small>{{ order.order_status }} · {{ order.fulfillment_status }} · {{ order.payment_status }}</small></div><div class="order-list-amount"><b>{{ money(order.total_amount) }}</b><small v-if="isSuperAdmin">成本 {{ money(order.total_cost) }}</small><InventoryProfit v-if="isSuperAdmin" :revenue="order.total_amount" :cost="order.total_cost" :quantity="order.items.reduce((sum, item) => sum + Number(item.quantity), 0)" :settings="profitSettings" :estimated="order.fulfillment_status !== 'fulfilled'" /></div><button class="mini-btn edit-btn" @click.stop="openOrder(order)">查看详情</button></article><p v-if="!completedOrderRows.length" class="empty-state">暂无已处理订单。</p></div></section>
       </template>
 
       <template v-else-if="currentSection === 'products'">
@@ -508,7 +721,20 @@ onUnmounted(() => {
     </main>
     <Teleport to="body">
     <div v-if="orderDetail.open || returnDraft.open || walkInReturn.open || pendingAction.open || flowDetail.open || productDetail.open" class="inventory-dialog-backdrop" @click.self="closeInventoryDialog">
-      <section v-if="flowDetail.open" class="inventory-dialog inventory-glass-card"><div class="inventory-card-title"><div><p class="eyebrow">BUSINESS DETAIL</p><h3>{{ flowDetail.movement.business_no || '库存流水详情' }}</h3></div><button class="mini-btn" @click="flowDetail.open=false">关闭</button></div><p>{{ typeText(flowDetail.movement.operation_type) }} · {{ dateText(flowDetail.movement.created_at) }}</p><div v-if="flowDetail.loading" class="dialog-lines"><p><span>正在读取单据详情</span><b>请稍候</b></p></div><div v-else-if="flowDetail.record" class="dialog-lines"><p><span>业务状态</span><b>{{ flowDetail.record.order_status || flowDetail.record.return_no || '已完成' }}</b></p><p><span>付款/退款</span><b>{{ flowDetail.record.payment_status || flowDetail.record.refund_method || '--' }}</b></p><p v-if="flowDetail.record.original_business_no"><span>原业务单号</span><b>{{ flowDetail.record.original_business_no }}</b></p><p v-for="item in flowDetail.items" :key="item.id"><span>{{ item.product_name }} × {{ item.quantity }}</span><b>{{ money(item.line_total ?? (item.unit_price * item.quantity)) }}</b></p></div><div v-else class="dialog-lines"><p><span>商品</span><b>{{ flowDetail.movement.inventory_products?.name || '--' }}</b></p><p><span>库存变化</span><b>{{ flowDetail.movement.before_sellable_stock ?? '--' }} → {{ flowDetail.movement.quantity }} → {{ flowDetail.movement.after_sellable_stock ?? '--' }}</b></p><p><span>备注</span><b>{{ flowDetail.movement.note || '--' }}</b></p><p v-if="flowDetail.error"><span>详情提示</span><b>{{ flowDetail.error }}</b></p></div><button class="glass-action-btn" @click="copyBusinessNo(flowDetail.movement.business_no)">复制单号</button></section>
+      <section v-if="flowDetail.open" class="inventory-dialog inventory-glass-card order-detail-dialog document-detail-dialog">
+        <header class="order-detail-header"><div><p class="eyebrow">BUSINESS DOCUMENT</p><div class="order-detail-title"><h3>单据详情</h3><strong>{{ flowDetail.movement.business_no || '未编号单据' }}</strong><span class="document-type-badge" :class="`document-type-${flowDetail.movement.operation_type}`">{{ typeText(flowDetail.movement.operation_type) }}</span><span class="order-status-badge">{{ documentStatusText(flowDetail.record, flowDetail.movement) }}</span></div><small class="document-created-at">创建时间 {{ dateText(flowDetail.record?.created_at || flowDetail.movement.created_at) }}</small></div><button class="mini-btn" aria-label="关闭单据详情" @click="flowDetail.open=false">关闭</button></header>
+        <div class="order-detail-scroll">
+          <div v-if="flowDetail.loading" class="document-loading">正在读取单据详情，请稍候…</div>
+          <template v-else>
+            <section class="order-detail-section"><h4>基本信息</h4><div class="order-info-grid document-info-grid"><p><span>业务类型</span><b>{{ typeText(flowDetail.movement.operation_type) }}</b></p><p><span>业务状态</span><b>{{ documentStatusText(flowDetail.record, flowDetail.movement) }}</b></p><p><span>付款 / 退款方式</span><b>{{ refundMethodText(flowDetail.record?.refund_method || flowDetail.record?.payment_method) }}</b></p><p><span>创建时间</span><b>{{ dateText(flowDetail.record?.created_at || flowDetail.movement.created_at) }}</b></p><p v-if="flowDetail.record?.original_order"><span>原销售单号</span><button class="document-link" @click="openRelatedOrder(flowDetail.record.original_order)">{{ flowDetail.record.original_order.order_no }}</button></p><p v-if="flowDetail.record?.return_no"><span>退货单号</span><b>{{ flowDetail.record.return_no }}</b></p><p><span>创建人</span><b>{{ flowDetail.record?.user_id || flowDetail.movement.user_id || '公司成员' }}</b></p><p><span>更新时间</span><b>{{ dateText(flowDetail.record?.updated_at || flowDetail.record?.created_at || flowDetail.movement.created_at) }}</b></p><p class="document-note"><span>备注</span><b>{{ flowDetail.record?.note || flowDetail.movement.note || '无备注' }}</b></p></div></section>
+            <section v-if="flowDetail.record?.original_order" class="order-detail-section"><h4>客户信息</h4><div class="order-info-grid"><p><span>客户</span><b>{{ flowDetail.record.original_order.customer_name || '临时客户' }}</b></p><p><span>联系方式</span><b>{{ [flowDetail.record.original_order.contact_name, flowDetail.record.original_order.contact_phone].filter(Boolean).join(' · ') || '未填写' }}</b></p><p><span>配送方式</span><b>{{ shippingText(flowDetail.record.original_order.shipping_method) }}</b></p><p><span>收货地址</span><b>{{ flowDetail.record.original_order.shipping_address || '无需配送' }}</b></p></div></section>
+            <section class="order-detail-section"><h4>商品明细</h4><div class="document-item-table"><div class="document-item-row document-item-head"><span>商品</span><span>规格 / SKU</span><span>供应商</span><span>数量</span><span>单价</span><span>小计</span></div><div v-for="item in flowDetail.items" :key="item.id" class="document-item-row"><div><strong>{{ item.product_name }}</strong><small v-if="flowDetail.record?.return_no">原购 {{ originalDocumentItem(item)?.quantity ?? '—' }} · 本次退 {{ item.quantity }}</small></div><span>{{ documentItemSku(item) }}</span><span>{{ documentItemSupplier(item) }}</span><span>{{ item.quantity }}</span><span>{{ money(item.unit_price) }}</span><b>{{ money(item.line_total ?? (item.unit_price * item.quantity)) }}</b></div><div v-if="!flowDetail.items.length" class="document-empty">暂无商品明细</div></div></section>
+            <div class="document-summary-grid"><section class="order-detail-section order-amount-card"><h4>金额汇总</h4><div class="order-amount-lines"><p><span>商品金额</span><b>{{ money(flowDetail.record?.subtotal ?? flowDetail.items.reduce((sum, item) => sum + Number(item.line_total ?? item.unit_price * item.quantity), 0)) }}</b></p><p v-if="flowDetail.record?.discount !== undefined"><span>优惠</span><b>-{{ money(flowDetail.record.discount) }}</b></p><p v-if="flowDetail.record?.freight !== undefined"><span>运费</span><b>{{ money(flowDetail.record.freight) }}</b></p><div></div><p class="order-total-line"><span>{{ flowDetail.record?.return_no ? '退款金额' : '实付金额' }}</span><strong>{{ money(flowDetail.record?.refund_amount ?? flowDetail.record?.total_amount ?? flowDetail.movement.total_amount) }}</strong></p></div></section><section v-if="isSuperAdmin" class="order-detail-section order-cost-card"><h4>成本信息 <small>仅超级管理员</small></h4><div class="order-amount-lines"><p><span>成本合计</span><b>{{ money(flowDetail.record?.total_cost ?? flowDetail.items.reduce((sum, item) => sum + Number(item.unit_cost || 0) * Number(item.quantity || 0), 0)) }}</b></p><InventoryProfit :revenue="flowDetail.record?.refund_amount ?? flowDetail.record?.total_amount ?? flowDetail.movement.total_amount" :cost="flowDetail.record?.total_cost ?? flowDetail.items.reduce((sum, item) => sum + Number(item.unit_cost || 0) * Number(item.quantity || 0), 0)" :quantity="flowDetail.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)" :settings="profitSettings" /></div></section></div>
+          </template>
+          <p v-if="flowDetail.error" class="return-submit-error" role="alert">{{ flowDetail.error }}</p>
+        </div>
+        <footer class="order-detail-actions"><button v-if="flowDetail.record?.order_no" class="glass-action-btn" @click="openPrint(flowDetail.record, flowDetail.items)">打印</button><button class="glass-action-btn" @click="copyBusinessNo(flowDetail.movement.business_no)">复制单号</button><button class="glass-primary-btn" @click="flowDetail.open=false">关闭</button></footer>
+      </section>
       <section v-else-if="productDetail.open" class="inventory-dialog inventory-glass-card"><div class="inventory-card-title"><div><p class="eyebrow">PRODUCT DETAIL</p><h3>{{ productDetail.product.name }}</h3></div><button class="mini-btn" @click="productDetail.open=false">关闭</button></div><div class="dialog-lines"><p><span>SKU / 规格</span><b>{{ productDetail.product.sku }} {{ productDetail.product.specification || '--' }}</b></p><p><span>分类 / 售价</span><b>{{ productDetail.product.category }} / {{ money(productDetail.product.sale_price) }}</b></p><p><span>库存</span><b>可售 {{ productDetail.product.stock }} · 待检查 {{ productDetail.product.pending_stock }} · 损耗 {{ productDetail.product.damaged_quantity }}</b></p><template v-if="isSuperAdmin"><InventoryProfit v-if="isSuperAdmin" :revenue="productDetail.product.sale_price" :cost="productDetail.product.cost_price" :quantity="1" :settings="profitSettings" :estimated="true" /><p><span>当前库存成本</span><b>{{ money(productDetail.product.stock * productDetail.product.cost_price) }}</b></p><p v-for="supplier in productDetail.suppliers" :key="supplier.id"><span>{{ supplier.inventory_suppliers?.name }} · 货号 {{ supplier.supplier_sku || '--' }}</span><b>参考 {{ money(supplier.reference_price) }} · 最近 {{ money(supplier.latest_price) }} · {{ supplier.latest_purchase_at ? dateText(supplier.latest_purchase_at) : '暂无采购' }}</b></p><p v-for="batch in productDetail.batches" :key="batch.id" class="order-cost-line"><span>{{ batch.inventory_suppliers?.name }} · {{ batch.batch_no }} · 入库 {{ batch.received_quantity }} · 在库 {{ batch.remaining_quantity }}</span><b>实际进价 {{ money(batch.unit_cost) }} · {{ dateText(batch.received_at) }}</b></p></template></div></section>
       <section v-else-if="orderDetail.open && !returnDraft.open" class="inventory-dialog inventory-glass-card order-detail-dialog">
         <header class="order-detail-header"><div><p class="eyebrow">ORDER DETAIL</p><div class="order-detail-title"><h3>订单详情</h3><strong>{{ orderDetail.order.order_no }}</strong><span class="order-status-badge">{{ orderStatusText(orderDetail.order.order_status) }}</span></div></div><button class="mini-btn" aria-label="关闭订单详情" @click="orderDetail.open=false">关闭</button></header>
@@ -518,7 +744,7 @@ onUnmounted(() => {
           <section class="order-detail-section order-amount-card"><h4>订单金额</h4><div class="order-amount-lines"><p><span>商品金额</span><b>{{ money(orderDetail.order.subtotal) }}</b></p><p><span>优惠</span><b>-{{ money(orderDetail.order.discount) }}</b></p><p><span>运费</span><b>{{ money(orderDetail.order.freight) }}</b></p><div></div><p class="order-total-line"><span>实付金额</span><strong>{{ money(orderDetail.order.total_amount) }}</strong></p><p><span>付款状态</span><b>{{ paymentStatusText(orderDetail.order.payment_status) }}</b></p></div></section>
           <section v-if="isSuperAdmin" class="order-detail-section order-cost-card"><h4>成本信息 <small>仅超级管理员</small></h4><div class="order-amount-lines"><p><span>订单成本</span><b>{{ money(orderDetail.order.total_cost) }}</b></p><InventoryProfit v-if="isSuperAdmin" :revenue="orderDetail.order.total_amount" :cost="orderDetail.order.total_cost" :quantity="orderDetail.items.reduce((sum, item) => sum + Number(item.quantity), 0)" :settings="profitSettings" :estimated="orderDetail.order.fulfillment_status !== 'fulfilled'" /><div v-for="item in orderDetail.items" :key="item.id" class="profit-item-cost"><p><span>{{ item.product_name }} · 单位成本</span><b>{{ money(item.unit_cost) }}</b></p><p><span>成本合计</span><b>{{ money(item.actual_cost ?? item.unit_cost * item.quantity) }}</b></p><InventoryProfit v-if="isSuperAdmin" :revenue="item.line_total" :cost="item.actual_cost ?? item.unit_cost * item.quantity" :quantity="item.quantity" :settings="profitSettings" :estimated="orderDetail.order.fulfillment_status !== 'fulfilled'" /></div><p><span>出库状态</span><b>{{ fulfillmentStatusText(orderDetail.order.fulfillment_status) }}</b></p></div></section>
         </div>
-        <footer class="order-detail-actions"><button class="glass-action-btn" @click="copyBusinessNo(orderDetail.order.order_no)">复制单号</button><button v-if="currentSection === 'pending' && orderDetail.order.fulfillment_status === 'not_fulfilled'" class="glass-primary-btn" :disabled="submitting" @click="fulfillOrder(orderDetail.order)">{{ submitting ? '出库中…' : '确认出库' }}</button><button v-else-if="currentSection === 'returns' && (orderDetail.order.fulfillment_status === 'fulfilled' || orderDetail.order.order_status === 'completed')" class="glass-primary-btn" :disabled="orderDetail.order.return_status === 'full'" @click="beginOrderReturn">退货</button></footer>
+        <footer class="order-detail-actions"><button class="glass-action-btn" @click="openPrint(orderDetail.order, orderDetail.items)">打印</button><button class="glass-action-btn" @click="copyBusinessNo(orderDetail.order.order_no)">复制单号</button><button v-if="currentSection === 'pending' && orderDetail.order.fulfillment_status === 'not_fulfilled'" class="glass-primary-btn" :disabled="submitting" @click="fulfillOrder(orderDetail.order)">{{ submitting ? '出库中…' : '确认出库' }}</button><button v-else-if="currentSection === 'returns'" class="glass-primary-btn" @click="beginOrderReturn">退货</button></footer>
       </section>
       <section v-else-if="returnDraft.open" class="inventory-dialog inventory-glass-card"><div class="inventory-card-title"><div><p class="eyebrow">SALE RETURN</p><h3>销售退货</h3></div><button class="mini-btn" @click="returnDraft.open=false">关闭</button></div><div class="return-items"><article v-for="item in returnDraft.items" :key="item.id"><strong>{{ item.product_name }}</strong><small>可退 {{ item.max }} 件 · 原价 {{ money(item.unit_price) }}</small><input v-model.number="item.quantity" type="number" min="0" :max="item.max" @input="syncRefund" /><select v-model="item.condition"><option value="resellable">完好 / 可销售</option><option value="damaged">损坏 / 损耗</option><option value="pending">待检查</option></select></article></div><label>退款金额<input v-model.number="returnDraft.refund" type="number" min="0" step="0.01" :placeholder="money(suggestedRefund)" /></label><label>退款方式<select v-model="returnDraft.method"><option value="cash">现金</option><option value="wechat">微信</option><option value="alipay">支付宝</option><option value="bank_card">银行卡</option><option value="other">其他</option></select></label><label>退货原因（必填）<input v-model="returnDraft.reason" placeholder="请填写退货原因" /></label><label>备注<input v-model="returnDraft.note" /></label><p v-if="returnDraft.error" class="return-submit-error" role="alert">{{ returnDraft.error }}</p><button class="glass-primary-btn" :disabled="submitting" @click="submitOrderReturn">{{ submitting ? '处理中…' : '确认退货并退款' }}</button></section>
       <section v-else-if="walkInReturn.open" class="inventory-dialog inventory-glass-card"><div class="inventory-card-title"><div><p class="eyebrow">WALK-IN RETURN</p><h3>无原订单退货</h3></div><button class="mini-btn" @click="walkInReturn.open=false">关闭</button></div><label>商品<InventorySearchSelect v-model="walkInReturn.product" :options="productOptions" placeholder="输入商品名称、SKU 或规格" /></label><label>数量<input v-model.number="walkInReturn.quantity" type="number" min="1" /></label><label>退款金额<input v-model.number="walkInReturn.refund" type="number" min="0" step="0.01" /></label><label>退款方式<select v-model="walkInReturn.method"><option value="cash">现金</option><option value="wechat">微信</option><option value="alipay">支付宝</option><option value="bank_card">银行卡</option><option value="other">其他</option></select></label><label>商品状态<select v-model="walkInReturn.condition"><option value="resellable">完好 / 可销售</option><option value="damaged">损坏 / 损耗</option><option value="pending">待检查</option></select></label><label>退货原因<input v-model="walkInReturn.reason" /></label><label>备注<input v-model="walkInReturn.note" /></label><button class="glass-primary-btn" :disabled="submitting" @click="submitWalkInReturn">{{ submitting ? '处理中…' : '确认无单退货' }}</button></section>
@@ -527,6 +753,8 @@ onUnmounted(() => {
     </Teleport>
     <Teleport to="body">
     <GlassModal class="inventory-message-overlay" v-if="modal.show" :message="modal.message" :cancel-text="modal.mode === 'delete' ? '取消' : ''" :confirm-text="modal.mode === 'delete' ? '删除' : '知道了'" @close="closeModal" @cancel="closeModal" @confirm="confirmModal" />
+    <SalesPrintDialog v-if="printJob" :order="printJob" :settings="printSettings" :company-name="organization?.name || ''" @close="printJob = null" />
+    <button v-if="pendingToast" type="button" class="inventory-pending-toast" @click="pendingToast=''; openSection('pending')">{{ pendingToast }}</button>
     </Teleport>
   </div>
 </template>
