@@ -40,7 +40,7 @@ function emitConfirm() {
 
 <template>
   <div class="timer-warning-overlay" @click.self="emit('close')">
-    <div class="timer-warning-modal" role="dialog" aria-modal="true">
+    <div class="timer-warning-modal" role="dialog" aria-modal="true" @click.stop>
       <p>{{ message }}</p>
 
       <div v-if="cancelText" class="timer-warning-actions">
