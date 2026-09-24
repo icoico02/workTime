@@ -1,6 +1,6 @@
 <script setup>
 import { Chart, registerables } from 'chart.js'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import FunctionHeader from '../components/FunctionHeader.vue'
 import { supabase } from '../supabase'
@@ -16,21 +16,26 @@ const hasLoaded = ref(false)
 const loadError = ref('')
 const attendanceRange = ref(7)
 const timerRange = ref(7)
+const approvalRange = ref(7)
+const attendanceRangeLoading = ref(false)
+const timerRangeLoading = ref(false)
+const approvalRangeLoading = ref(false)
 const attendanceType = ref('clock-lines')
 const attendanceReference = ref(false)
 const timerType = ref('bar')
 const timerMetric = ref('total')
-const approvalRange = ref(7)
 const approvalType = ref('bar')
 const attendanceCanvas = ref(null)
 const timerCanvas = ref(null)
 const approvalCanvas = ref(null)
-const attendanceChart = ref(null)
-const timerChart = ref(null)
-const approvalChart = ref(null)
+// Chart.js manages its own mutable object graph; keep instances out of Vue's deep proxy.
+const attendanceChart = shallowRef(null)
+const timerChart = shallowRef(null)
+const approvalChart = shallowRef(null)
 const currentUserId = ref('')
 const isSuperAdmin = ref(false)
 let realtimeChannel = null
+const rangeRequestIds = { attendance: 0, timer: 0, approval: 0 }
 
 const chartTypes = [
   { value: 'line', label: '折线图' },
@@ -67,6 +72,11 @@ function rangeDays(days) {
     date.setDate(date.getDate() - (days - index - 1))
     return localDateKey(date)
   })
+}
+
+function replaceRangeRecords(records, incomingRecords, days, dateKey) {
+  const dates = new Set(rangeDays(days))
+  return [...records.filter((record) => !dates.has(dateKey(record))), ...incomingRecords]
 }
 
 function rangeLabel(dateKey) {
@@ -340,13 +350,8 @@ function approvalData(days, type) {
   }
 }
 
-function renderChart(canvas, chartRef, type, data) {
-  if (!canvas) return
-  chartRef.value?.destroy()
-  chartRef.value = new Chart(canvas, {
-    type,
-    data,
-    options: {
+function chartOptions(type) {
+  return {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
@@ -377,7 +382,7 @@ function renderChart(canvas, chartRef, type, data) {
             color: '#8490a3',
             font: { size: 10 },
             callback(value) {
-              const dataset = data.datasets.find((item) => item.clockUnit || item.intervalUnit || item.durationMinutesUnit || item.durationUnit)
+              const dataset = this.chart.data.datasets.find((item) => item.clockUnit || item.intervalUnit || item.durationMinutesUnit || item.durationUnit)
               if (dataset?.clockUnit || dataset?.intervalUnit) return formatClockTime(value)
               if (dataset?.durationMinutesUnit) return formatMinutesDuration(value)
               return dataset?.durationUnit ? formatDuration(Number(value)) : value
@@ -385,8 +390,20 @@ function renderChart(canvas, chartRef, type, data) {
           },
         },
       },
-    },
-  })
+  }
+}
+
+function renderChart(canvas, chartRef, type, data) {
+  if (!canvas) return
+  if (chartRef.value?.config.type === type) {
+    chartRef.value.data.labels = data.labels
+    chartRef.value.data.datasets = data.datasets
+    chartRef.value.update()
+    return
+  }
+
+  chartRef.value?.destroy()
+  chartRef.value = new Chart(canvas, { type, data, options: chartOptions(type) })
 }
 
 function resizeOnNextFrame(chartRef) {
@@ -486,6 +503,73 @@ async function refreshApprovalData() {
   await renderApprovalChart()
 }
 
+async function selectAttendanceRange(days) {
+  if (attendanceRangeLoading.value && attendanceRange.value === days) return
+  attendanceRange.value = days
+  const requestId = ++rangeRequestIds.attendance
+  attendanceRangeLoading.value = true
+
+  try {
+    const { data, error } = await supabase
+      .from('attendance_records')
+      .select('work_date, check_in_time, check_out_time')
+      .eq('user_id', currentUserId.value)
+      .gte('work_date', rangeDays(days)[0])
+    if (requestId !== rangeRequestIds.attendance || error) return
+    attendanceRecords.value = replaceRangeRecords(attendanceRecords.value, data || [], days, (record) => record.work_date)
+    await renderAttendanceChart()
+  } catch (error) {
+    console.error('切换签到统计范围失败:', error)
+  } finally {
+    if (requestId === rangeRequestIds.attendance) attendanceRangeLoading.value = false
+  }
+}
+
+async function selectTimerRange(days) {
+  if (timerRangeLoading.value && timerRange.value === days) return
+  timerRange.value = days
+  const requestId = ++rangeRequestIds.timer
+  timerRangeLoading.value = true
+  const startDate = new Date(`${rangeDays(days)[0]}T00:00:00`)
+
+  try {
+    const { data, error } = await supabase
+      .from('timer_records')
+      .select('start_time, total_milliseconds, total_seconds')
+      .eq('user_id', currentUserId.value)
+      .gte('start_time', startDate.toISOString())
+    if (requestId !== rangeRequestIds.timer || error) return
+    timerRecords.value = replaceRangeRecords(timerRecords.value, data || [], days, (record) => localDateKey(record.start_time))
+    await renderTimerChart()
+  } catch (error) {
+    console.error('切换计时统计范围失败:', error)
+  } finally {
+    if (requestId === rangeRequestIds.timer) timerRangeLoading.value = false
+  }
+}
+
+async function selectApprovalRange(days) {
+  if (approvalRangeLoading.value && approvalRange.value === days) return
+  approvalRange.value = days
+  const requestId = ++rangeRequestIds.approval
+  approvalRangeLoading.value = true
+  const startDate = new Date(`${rangeDays(days)[0]}T00:00:00`)
+
+  try {
+    const { data, error } = await supabase
+      .from('user_approval_logs')
+      .select('*')
+      .gte('created_at', startDate.toISOString())
+    if (requestId !== rangeRequestIds.approval || error) return
+    approvalLogs.value = replaceRangeRecords(approvalLogs.value, data || [], days, (record) => localDateKey(record.created_at))
+    await renderApprovalChart()
+  } catch (error) {
+    console.error('切换审批统计范围失败:', error)
+  } finally {
+    if (requestId === rangeRequestIds.approval) approvalRangeLoading.value = false
+  }
+}
+
 function subscribeToChanges() {
   if (!supabase || !currentUserId.value) return
   realtimeChannel = supabase
@@ -502,19 +586,19 @@ async function signOut() {
   await router.push('/')
 }
 
-watch([attendanceRange, attendanceType, attendanceReference], async () => {
+watch([attendanceType, attendanceReference], async () => {
   if (!hasLoaded.value) return
   persistChartSettings()
   await renderAttendanceChart()
 })
 
-watch([timerRange, timerType, timerMetric], async () => {
+watch([timerType, timerMetric], async () => {
   if (!hasLoaded.value) return
   persistChartSettings()
   await renderTimerChart()
 })
 
-watch([approvalRange, approvalType], async () => {
+watch(approvalType, async () => {
   if (!hasLoaded.value) return
   persistChartSettings()
   await renderApprovalChart()
@@ -569,7 +653,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="dashboard-range" aria-label="签到趋势时间范围">
-            <button v-for="days in rangeOptions" :key="days" :class="{ active: attendanceRange === days }" type="button" @click="attendanceRange = days">近 {{ days }} 天</button>
+            <button v-for="days in rangeOptions" :key="days" :class="{ active: attendanceRange === days, loading: attendanceRangeLoading && attendanceRange === days }" :disabled="attendanceRangeLoading && attendanceRange === days" type="button" @click="selectAttendanceRange(days)">近 {{ days }} 天<span v-if="attendanceRangeLoading && attendanceRange === days">…</span></button>
           </div>
           <div class="dashboard-chart"><canvas ref="attendanceCanvas"></canvas></div>
         </section>
@@ -592,7 +676,7 @@ onBeforeUnmount(() => {
             <div><span>平均单次耗时</span><strong>{{ timerSummary.average }}</strong></div>
           </div>
           <div class="dashboard-range" aria-label="计时统计时间范围">
-            <button v-for="days in rangeOptions" :key="days" :class="{ active: timerRange === days }" type="button" @click="timerRange = days">近 {{ days }} 天</button>
+            <button v-for="days in rangeOptions" :key="days" :class="{ active: timerRange === days, loading: timerRangeLoading && timerRange === days }" :disabled="timerRangeLoading && timerRange === days" type="button" @click="selectTimerRange(days)">近 {{ days }} 天<span v-if="timerRangeLoading && timerRange === days">…</span></button>
           </div>
           <div class="dashboard-chart"><canvas ref="timerCanvas"></canvas></div>
         </section>
@@ -605,7 +689,7 @@ onBeforeUnmount(() => {
             </select>
           </div>
           <div class="dashboard-range" aria-label="审批操作时间范围">
-            <button v-for="days in rangeOptions" :key="days" :class="{ active: approvalRange === days }" type="button" @click="approvalRange = days">近 {{ days }} 天</button>
+            <button v-for="days in rangeOptions" :key="days" :class="{ active: approvalRange === days, loading: approvalRangeLoading && approvalRange === days }" :disabled="approvalRangeLoading && approvalRange === days" type="button" @click="selectApprovalRange(days)">近 {{ days }} 天<span v-if="approvalRangeLoading && approvalRange === days">…</span></button>
           </div>
           <div class="dashboard-chart"><canvas ref="approvalCanvas"></canvas></div>
         </section>

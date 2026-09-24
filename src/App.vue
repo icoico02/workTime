@@ -321,14 +321,25 @@ const activeNavigation = computed(() => {
 
 function restoreWorkspaceScreen() {
   const key = userStorageKey(workspaceScreenStorageKey)
-  const savedScreen = key ? localStorage.getItem(key) : null
-  return ['attendance', 'timer'].includes(savedScreen) ? savedScreen : 'home'
+  if (key) localStorage.removeItem(key)
+  const requestedScreen = route.query.screen
+  if (requestedScreen === 'attendance' || requestedScreen === 'timer') return requestedScreen
+  return 'home'
 }
 
 watch(currentScreen, (screen) => {
   const key = userStorageKey(workspaceScreenStorageKey)
   if (key) localStorage.setItem(key, screen)
 })
+
+watch(
+  () => route.query.screen,
+  (screen) => {
+    if (route.path === '/') {
+      currentScreen.value = screen === 'attendance' || screen === 'timer' ? screen : 'home'
+    }
+  },
+)
 
 async function loadPendingApprovalCount() {
   if (!supabase || !authUser.value || !isAdmin.value) {
@@ -651,9 +662,6 @@ async function handleAuthSession(session) {
   userProfile.value = profile
   currentScreen.value = restoreWorkspaceScreen()
   resetViewportScroll()
-  if (isInventoryRoute.value || isAdminRoute.value) {
-    await router.replace('/')
-  }
   return true
 }
 
@@ -902,15 +910,18 @@ async function retryTimerRecord() {
   showTimerWarning('记录已保存')
 }
 
-function openAttendancePage() {
+async function openAttendancePage() {
+  await router.push({ path: '/', query: { screen: 'attendance' } })
   currentScreen.value = 'attendance'
 }
 
-function openTimerPage() {
+async function openTimerPage() {
+  await router.push({ path: '/', query: { screen: 'timer' } })
   currentScreen.value = 'timer'
 }
 
-function goHome() {
+async function goHome() {
+  await router.push({ path: '/', query: {} })
   currentScreen.value = 'home'
   loadPendingApprovalCount()
 }
@@ -940,7 +951,7 @@ async function navigateWorkspace(target) {
     return
   }
 
-  if (route.path !== '/') await router.push('/')
+  await router.push({ path: '/', query: target === 'home' ? {} : { screen: target } })
   currentScreen.value = target
   if (target === 'home') loadPendingApprovalCount()
   resetViewportScroll()
@@ -1207,9 +1218,6 @@ onMounted(async () => {
   authLoading.value = false
 
   if (approved && authUser.value) {
-    if (isInventoryRoute.value) {
-      await router.replace('/')
-    }
     await loadAttendanceRecords()
     restoreActiveTimerSession()
     await loadTimerHistory()
@@ -1224,9 +1232,6 @@ onMounted(async () => {
     window.setTimeout(async () => {
       const approvedSession = await handleAuthSession(sessionState)
       if (approvedSession && authUser.value) {
-        if (isInventoryRoute.value) {
-          await router.replace('/')
-        }
         await loadAttendanceRecords()
         restoreActiveTimerSession()
         await loadTimerHistory()
