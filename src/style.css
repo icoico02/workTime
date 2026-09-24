@@ -2285,6 +2285,7 @@ button.is-pressed {
 
 .log-inbound { color: #3e806d; background: rgba(194, 237, 216, 0.65); }
 .log-sale { color: #6170b2; background: rgba(215, 216, 251, 0.65); }
+.log-normal_outbound { color: #a9683f; background: rgba(249, 220, 190, 0.7); }
 .log-loss { color: #b86d77; background: rgba(250, 216, 222, 0.65); }
 .amount-in { color: #4d947c; }
 .amount-out { color: #b06b76; }
@@ -3427,22 +3428,263 @@ body,
 .inventory-app .metric-pending strong { color: #c0392b; }
 
 .order-row-pending {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   border-radius: 14px;
-  padding-left: 10px;
+  padding-left: 12px;
   padding-right: 10px;
-  background: linear-gradient(140deg, rgba(255, 232, 232, 0.72), rgba(255, 245, 235, 0.55));
-  box-shadow: inset 3px 0 0 #e5484d;
+  background:
+    radial-gradient(
+      ellipse 42% 120% at 0% 50%,
+      rgba(255, 92, 104, 0.14) 0%,
+      rgba(255, 132, 139, 0.07) 38%,
+      rgba(255, 185, 185, 0.025) 68%,
+      transparent 100%
+    ),
+    rgba(255, 255, 255, 0.58);
+}
+
+/* Keep the order copy clear of the clipped pending-state accent. */
+.order-list article.order-row-pending {
+  padding-left: 28px;
+  padding-right: 10px;
+}
+
+.order-row-pending::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.1;
+  background: linear-gradient(
+    128deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.32) 38%,
+    transparent 52%
+  );
+}
+
+.order-row-pending::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(180deg, #f04454 0%, #ff6970 52%, #f99382 100%);
+  box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.28), inset 0 0 7px rgba(255, 74, 82, 0.32);
+}
+
+.order-row-pending > * {
+  position: relative;
+  z-index: 2;
 }
 
 .pending-flag {
   display: inline-flex;
   align-items: center;
+  width: max-content;
   min-height: 22px;
   padding: 0 8px;
   border-radius: 999px;
   color: #c0392b;
   background: rgba(255, 220, 220, 0.92);
   font-weight: 800;
+}
+
+.order-row-pending > div:first-child {
+  min-width: 0;
+}
+
+.order-row-pending .order-list-amount {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  min-width: 92px;
+}
+
+.order-row-pending .order-list-amount b {
+  white-space: nowrap;
+}
+
+.order-row-pending .pending-flag {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.order-list article.order-row-pending {
+  transition: background 180ms ease, box-shadow 180ms ease;
+}
+
+.order-list article.order-row-pending:hover,
+.order-list article.order-row-pending:focus-within {
+  background:
+    radial-gradient(
+      ellipse 44% 125% at 0% 50%,
+      rgba(255, 76, 91, 0.2) 0%,
+      rgba(255, 125, 134, 0.1) 38%,
+      rgba(255, 185, 185, 0.035) 68%,
+      transparent 100%
+    ),
+    rgba(255, 255, 255, 0.68);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 125, 132, 0.24),
+    inset 10px 0 18px rgba(255, 105, 112, 0.06);
+}
+
+.order-list article.order-row-pending:hover::before,
+.order-list article.order-row-pending:focus-within::before {
+  opacity: 0.17;
+}
+
+.order-list article.order-row-pending:hover::after,
+.order-list article.order-row-pending:focus-within::after {
+  box-shadow:
+    inset 0 0 4px rgba(255, 255, 255, 0.38),
+    inset 0 0 8px rgba(255, 74, 82, 0.42),
+    0 0 5px rgba(255, 84, 96, 0.18);
+}
+
+/* Shared row hover language for the other inventory lists. */
+.order-list article:not(.order-row-pending),
+.flow-list article,
+.business-flow-list article {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  --row-accent: #6f9fe0;
+  --row-accent-soft: rgba(133, 185, 245, 0.18);
+  --row-accent-glow: rgba(89, 157, 224, 0.28);
+  --row-accent-border: rgba(91, 146, 213, 0.2);
+  transition: background 180ms ease, box-shadow 180ms ease;
+}
+
+.order-list article:not(.order-row-pending)::after,
+.flow-list article::after,
+.business-flow-list article::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(180deg, var(--row-accent), color-mix(in srgb, var(--row-accent) 62%, #f79b8b));
+  box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.24), inset 0 0 7px var(--row-accent-glow);
+}
+
+.order-list article:not(.order-row-pending):hover,
+.order-list article:not(.order-row-pending):focus-within,
+.flow-list article:hover,
+.flow-list article:focus-within,
+.business-flow-list article:hover,
+.business-flow-list article:focus-within {
+  background: linear-gradient(110deg, var(--row-accent-soft), rgba(255, 255, 255, 0.16) 42%, transparent 78%);
+  box-shadow: inset 0 0 0 1px var(--row-accent-border), inset 8px 0 18px color-mix(in srgb, var(--row-accent-glow) 28%, transparent);
+}
+
+/* Movement types use distinct low-saturation accents. */
+.flow-list article:has(.log-inbound):hover,
+.flow-list article:has(.log-inbound):focus-within,
+.business-flow-list article:has(.log-inbound):hover,
+.business-flow-list article:has(.log-inbound):focus-within {
+  background: linear-gradient(110deg, rgba(137, 214, 178, 0.22), rgba(255, 255, 255, 0.15) 44%, transparent 78%);
+  box-shadow: inset 0 0 0 1px rgba(91, 181, 136, 0.22), inset 8px 0 18px rgba(92, 190, 139, 0.05);
+}
+
+.flow-list article:has(.log-inbound),
+.business-flow-list article:has(.log-inbound) {
+  --row-accent: #63bd8f;
+  --row-accent-soft: rgba(137, 214, 178, 0.2);
+  --row-accent-glow: rgba(92, 190, 139, 0.28);
+  --row-accent-border: rgba(91, 181, 136, 0.22);
+}
+
+.flow-list article:has(.log-loss),
+.flow-list article:has(.log-normal_outbound),
+.business-flow-list article:has(.log-loss),
+.business-flow-list article:has(.log-normal_outbound) {
+  --row-accent: #e58b62;
+  --row-accent-soft: rgba(247, 190, 141, 0.2);
+  --row-accent-glow: rgba(225, 145, 82, 0.28);
+  --row-accent-border: rgba(218, 145, 84, 0.2);
+}
+
+.flow-list article:has(.log-sale),
+.business-flow-list article:has(.log-sale) {
+  --row-accent: #679bdf;
+}
+
+.business-flow-list article.document-row-type-inbound {
+  --row-accent: #63bd8f;
+  --row-accent-soft: rgba(137, 214, 178, 0.2);
+  --row-accent-glow: rgba(92, 190, 139, 0.28);
+  --row-accent-border: rgba(91, 181, 136, 0.22);
+}
+
+.business-flow-list article.document-row-type-sale,
+.business-flow-list article.document-row-type-sale_return {
+  --row-accent: #679bdf;
+}
+
+.business-flow-list article.document-row-type-loss,
+.business-flow-list article.document-row-type-normal_outbound,
+.business-flow-list article.document-row-type-purchase_return {
+  --row-accent: #e58b62;
+  --row-accent-soft: rgba(247, 190, 141, 0.2);
+  --row-accent-glow: rgba(225, 145, 82, 0.28);
+  --row-accent-border: rgba(218, 145, 84, 0.2);
+}
+
+.flow-list article:has(.log-sale):hover,
+.flow-list article:has(.log-sale):focus-within,
+.business-flow-list article:has(.log-sale):hover,
+.business-flow-list article:has(.log-sale):focus-within {
+  background: linear-gradient(110deg, rgba(133, 185, 245, 0.22), rgba(255, 255, 255, 0.15) 44%, transparent 78%);
+  box-shadow: inset 0 0 0 1px rgba(91, 146, 213, 0.22), inset 8px 0 18px rgba(89, 157, 224, 0.05);
+}
+
+.flow-list article:has(.log-loss):hover,
+.flow-list article:has(.log-loss):focus-within,
+.flow-list article:has(.log-normal_outbound):hover,
+.flow-list article:has(.log-normal_outbound):focus-within,
+.business-flow-list article:has(.log-loss):hover,
+.business-flow-list article:has(.log-loss):focus-within,
+.business-flow-list article:has(.log-normal_outbound):hover,
+.business-flow-list article:has(.log-normal_outbound):focus-within {
+  background: linear-gradient(110deg, rgba(247, 190, 141, 0.22), rgba(255, 255, 255, 0.15) 44%, transparent 78%);
+  box-shadow: inset 0 0 0 1px rgba(218, 145, 84, 0.2), inset 8px 0 18px rgba(225, 145, 82, 0.045);
+}
+
+.order-list article.order-row-type-return:hover,
+.order-list article.order-row-type-return:focus-within {
+  background: linear-gradient(110deg, rgba(205, 174, 239, 0.2), rgba(255, 255, 255, 0.16) 42%, transparent 78%);
+  box-shadow: inset 0 0 0 1px rgba(157, 116, 205, 0.2), inset 8px 0 18px rgba(155, 111, 204, 0.045);
+}
+
+/* Reserve a clear accent lane so the data never sits beneath the glow bar. */
+.order-list article:not(.order-row-pending),
+.flow-list article,
+.business-flow-list article {
+  box-sizing: border-box;
+  padding-left: 24px;
+  padding-right: 10px;
+  border-radius: 12px;
+}
+
+.business-flow-list article > * {
+  position: relative;
+  z-index: 2;
 }
 
 .inventory-pending-toast {
@@ -3504,6 +3746,17 @@ body,
   padding: 11px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.4);
   cursor: pointer;
+}
+
+/* Final document-row spacing: keep content clear of the left status accent. */
+.business-flow-list article {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  box-sizing: border-box;
+  padding-left: 24px;
+  padding-right: 10px;
+  border-radius: 12px;
 }
 
 .business-flow-list article > div {
@@ -3850,6 +4103,55 @@ body:has(#sales-print-root) {
   color: #b42336;
 }
 
+.inventory-profit-compact {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  color: #40516d;
+  line-height: 1.25;
+}
+
+.inventory-profit-compact .profit-metric {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.inventory-profit-compact .profit-metric small {
+  color: #8290a6;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.inventory-profit-compact .profit-metric b {
+  min-width: 0;
+  color: #30425f;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inventory-profit-compact.inventory-profit-low .profit-metric:nth-child(2) b,
+.inventory-profit-compact.inventory-profit-low .profit-metric:nth-child(3) b {
+  color: #b42336;
+}
+
+.inventory-profit-compact.inventory-profit-low .profit-metric:first-child b {
+  color: #30425f;
+}
+
+.inventory-profit-compact .profit-warning-label {
+  grid-column: 1 / -1;
+  width: max-content;
+  margin-top: 1px;
+}
+
+.order-list-amount > .inventory-profit-compact {
+  flex-basis: 100%;
+}
+
 .inventory-metric .profit-number-low {
   color: #b42336;
 }
@@ -4058,6 +4360,118 @@ body:has(#sales-print-root) {
 }
 
 @media (max-width: 600px) {
+  .inventory-app .order-list-rich {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto auto auto;
+    align-items: start;
+    gap: 9px 12px;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 16px 14px 14px 24px;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child {
+    display: contents;
+    min-width: 0;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child > strong,
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child > small,
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > .order-list-amount,
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > button {
+    min-width: 0;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child > strong {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child > small {
+    grid-column: 1 / -1;
+    overflow: hidden;
+    margin: 0;
+    word-break: normal;
+    overflow-wrap: break-word;
+    white-space: normal;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child > small:nth-of-type(1) {
+    grid-row: 2;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child > small:nth-of-type(2) {
+    grid-row: 3;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > div:first-child > small:nth-of-type(3) {
+    grid-row: 4;
+    display: inline-flex;
+    flex-wrap: wrap;
+    width: max-content;
+    max-width: 100%;
+    padding: 4px 8px;
+    border-radius: 999px;
+    color: #687994;
+    background: rgba(221, 231, 247, 0.68);
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > .order-list-amount {
+    display: contents;
+    min-width: 0;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > .order-list-amount > small {
+    display: none;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > .order-list-amount > b {
+    grid-column: 2;
+    grid-row: 1;
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > .order-list-amount > small,
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > .order-list-amount > .inventory-profit {
+    grid-column: 1 / -1;
+    grid-row: 5;
+    justify-self: start;
+    min-width: 0;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > .order-list-amount > .inventory-profit-compact {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    font-size: 0.78rem;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > button {
+    grid-column: 1 / -1;
+    grid-row: 6;
+    width: 100%;
+    min-height: 40px;
+    margin-top: 2px;
+  }
+
+  .inventory-app .order-list-rich > article.order-row-open:not(.order-row-pending) > * {
+    max-width: 100%;
+  }
+
   .order-detail-dialog {
     width: 94vw;
     max-height: calc(100dvh - 28px);
@@ -4132,5 +4546,25 @@ body:has(#sales-print-root) {
 
   .return-items select {
     grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .order-row-pending {
+    background:
+      radial-gradient(
+        ellipse 42% 120% at 0% 50%,
+        rgba(255, 92, 104, 0.09) 0%,
+        rgba(255, 132, 139, 0.045) 38%,
+        transparent 100%
+      ),
+      rgba(255, 255, 255, 0.58);
+  }
+  .order-row-pending::before {
+    opacity: 0.08;
+  }
+  .order-row-pending::after {
+    background: linear-gradient(180deg, #d94a58 0%, #ed6b70 52%, #dc887d 100%);
+    box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.18), inset 0 0 6px rgba(255, 74, 82, 0.22);
   }
 }

@@ -1,13 +1,19 @@
 <script setup>
 import { computed } from 'vue'
 import { evaluateProfit } from '../inventoryProfit'
-const props = defineProps({ revenue: [Number, String], cost: [Number, String], quantity: [Number, String], settings: { type: Object, required: true }, estimated: Boolean })
+const props = defineProps({ revenue: [Number, String], cost: [Number, String], quantity: [Number, String], settings: { type: Object, required: true }, estimated: Boolean, compact: Boolean })
 const result = computed(() => evaluateProfit(props.revenue, props.cost, props.quantity, props.settings))
 const money = (value) => `¥${value.toFixed(2)}`
 </script>
 
 <template>
-  <span v-if="result" class="inventory-profit" :class="{ 'inventory-profit-low': result.low }">
+  <span v-if="compact && result" class="inventory-profit inventory-profit-compact" :class="{ 'inventory-profit-low': result.low }">
+    <span class="profit-metric"><small>成本</small><b>{{ money(Number(cost || 0)) }}</b></span>
+    <span class="profit-metric"><small>毛利</small><b>{{ money(result.profit) }}</b></span>
+    <span class="profit-metric"><small>毛利率</small><b>{{ result.margin == null ? '不适用' : `${result.margin.toFixed(2)}%` }}</b></span>
+    <strong v-if="result.low" class="profit-warning-label">低毛利</strong>
+  </span>
+  <span v-else-if="result" class="inventory-profit" :class="{ 'inventory-profit-low': result.low }">
     <span>{{ estimated ? '预估毛利' : '毛利' }} {{ money(result.profit) }}</span>
     <span>每件 {{ money(result.unitProfit) }}</span>
     <span>毛利率 {{ result.margin == null ? '不适用' : `${result.margin.toFixed(2)}%` }}</span>
